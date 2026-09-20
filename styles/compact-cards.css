@@ -185,6 +185,25 @@ body.dnd5e-compact-cards {
       }
     }
 
+    /* The save row collapses its list: click the icon or any empty area of the row */
+    .dcc-save-row.dcc-collapsible {
+      cursor: var(--cursor-pointer, pointer);
+    }
+    .dcc-save-toggle {
+      margin-inline-start: auto;
+      display: inline-flex;
+      align-items: center;
+      font-size: var(--font-size-10);
+      color: var(--color-text-secondary);
+      transition: transform 0.15s ease;
+    }
+    .dcc-save-group.collapsed .dcc-save-toggle {
+      transform: rotate(180deg);
+    }
+    .dcc-save-group.collapsed > .dcc-save-list {
+      display: none;
+    }
+
     /* Save activities list their targets in the save section instead of the card's targets row */
     recorded-targets.dcc-merged-targets {
       display: none;

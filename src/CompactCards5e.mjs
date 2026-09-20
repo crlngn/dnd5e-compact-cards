@@ -100,6 +100,8 @@ export class CompactCards5e {
   #drawerStates = new Map();
   /** @type {Map<string, boolean>} Expanded state of tag rows, keyed by origin message id */
   #tagStates = new Map();
+  /** @type {Map<string, boolean>} Open state of save sections, keyed by `${originId}:${ability}` */
+  #saveStates = new Map();
 
   /**
    * @param {CompactCardsOptions} options
@@ -511,6 +513,7 @@ export class CompactCards5e {
       wrapper.append(row, list);
       if (insertBefore) insertBefore.before(wrapper);
       else content.appendChild(wrapper);
+      this.#wireSaveToggle(origin, ability, row, wrapper);
 
       if (isSaveActivity) {
         this.#fillSaveTargets(origin, groupEntries, list);
@@ -522,6 +525,37 @@ export class CompactCards5e {
     if (isSaveActivity) {
       content.querySelector("recorded-targets")?.classList.add("dcc-merged-targets");
     }
+  }
+
+  /**
+   * Makes a save row collapse its list of saves. Clicking the row's icon or any empty area of the
+   * row toggles the list; clicks on buttons, links and the DC are left alone. The state is kept
+   * per card and ability so re-renders restore it.
+   * @param {ChatMessage} origin
+   * @param {string} ability
+   * @param {HTMLElement} row
+   * @param {HTMLElement} wrapper - The group element holding the row and the list
+   */
+  #wireSaveToggle(origin, ability, row, wrapper) {
+    const key = `${origin.id}:${ability}`;
+    const toggle = document.createElement("span");
+    toggle.className = "dcc-save-toggle";
+    toggle.innerHTML = `<i class="fa-solid fa-chevron-up" inert></i>`;
+    row.querySelector(".dcc-row-main")?.appendChild(toggle);
+    row.classList.add("dcc-collapsible");
+    const setOpen = (open) => {
+      wrapper.classList.toggle("collapsed", !open);
+      row.setAttribute("aria-expanded", String(open));
+    };
+    setOpen(this.#saveStates.get(key) ?? true);
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("button, a, input, .dcc-dc")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const open = wrapper.classList.contains("collapsed");
+      this.#saveStates.set(key, open);
+      setOpen(open);
+    });
   }
 
   /**
