@@ -147,8 +147,8 @@ export class CompactCards5e {
     this.handledBy = null;
     this.isSupported = this.#checkSupport();
     this.#log("CompactCards5e.activate", [this.id, this.isSupported, this.unsupportedReason]);
-    this.applyLabeledButtons();
     if (!this.isSupported) return;
+    this.applyLabeledButtons();
 
     foundry.applications.handlebars.loadTemplates(Object.values(this.#summaryTemplates));
     this.#patchSummaryTemplates();
@@ -212,11 +212,12 @@ export class CompactCards5e {
   }
 
   /**
-   * Applies the labeled buttons setting through a body class
+   * Applies the labeled buttons setting through a body class. Like the rest of the feature this
+   * only acts on dnd5e 6.0+, where the cards it styles exist.
    * @param {boolean} [value] - New setting value, when called from a setting change
    */
   applyLabeledButtons(value) {
-    if (!this.activated || game.system?.id !== "dnd5e") return;
+    if (!this.activated || !this.isSupported) return;
     const labeled = value !== undefined ? value : this.#setting("labeledButtons");
     document.body.classList.toggle(ICON_BUTTONS_BODY_CLASS, !labeled);
   }
