@@ -384,6 +384,9 @@ export class CompactCards5e {
     if (rollMessage.rolls[0]?.isCritical) {
       row.classList.add("critical");
     }
+    if (game.user.isGM) {
+      row.querySelector(".dcc-row-main")?.appendChild(this.#createSelectTargetsButton(rollMessage));
+    }
 
     if (!rollMessage.isContentVisible) return;
     const rolls = this.#aggregateDamage(rollMessage.rolls);
@@ -646,6 +649,48 @@ export class CompactCards5e {
       }
     });
     return button;
+  }
+
+  /**
+   * Creates the GM's button that selects, on the canvas, the tokens a damage or healing roll
+   * recorded as its targets
+   * @param {ChatMessage} rollMessage
+   * @returns {HTMLButtonElement}
+   */
+  #createSelectTargetsButton(rollMessage) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "unbutton dcc-record-targets dcc-select-targets";
+    button.setAttribute("aria-label", this.#localize("selectTargeted"));
+    button.setAttribute("data-tooltip", "");
+    button.innerHTML = `<i class="fa-solid fa-crosshairs" inert></i>`;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const tokens = (rollMessage.system?.targets ?? [])
+        .map(descriptor => CompactCards5e.resolveTargetToken(descriptor))
+        .filter(token => token?.control);
+      if (!tokens.length) {
+        ui.notifications?.warn(this.#localize("noRecordedTargets"));
+        return;
+      }
+      tokens.forEach((token, i) => token.control({ releaseOthers: i === 0 }));
+    });
+    return button;
+  }
+
+  /**
+   * Resolves a recorded target descriptor to a token on the viewed scene, if any
+   * @param {object} descriptor
+   * @returns {Token|null}
+   */
+  static resolveTargetToken(descriptor) {
+    const TargetsField = dnd5e.dataModels?.chatMessage?.fields?.TargetsField;
+    const resolved = TargetsField?.resolve?.(descriptor);
+    if (resolved?.token) return resolved.token;
+    const actorId = foundry.utils.parseUuid(descriptor?.actor ?? "")?.id;
+    if (!actorId) return null;
+    return canvas.tokens?.placeables.find(t => t.document.actor?.id === actorId || t.document.baseActor?.id === actorId) ?? null;
   }
 
   /**

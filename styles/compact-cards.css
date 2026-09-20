@@ -231,6 +231,10 @@ body.dnd5e-compact-cards {
       flex: 0 0 auto;
       gap: 2px;
     }
+    /* GM button on a damage row that selects the roll's recorded targets on the canvas */
+    .dcc-roll-row > .dcc-row-main > button.dcc-select-targets {
+      margin-inline-start: 2px;
+    }
     button.dcc-record-targets {
       flex: 0 0 auto;
       width: var(--button-size, 24px);
