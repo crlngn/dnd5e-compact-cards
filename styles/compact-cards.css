@@ -414,9 +414,10 @@ body.dnd5e-compact-cards {
       }
     }
 
-    /* Damage tray moved out of its own card keeps the system's collapsible header */
+    /* Damage tray moved out of its own card keeps the system's collapsible header and spans the
+       full card width, so no strip is left empty under the row icon */
     .card-summary > damage-application {
-      margin: 0 0 6px calc(var(--button-size, 24px) + 8px);
+      margin: 0 0 6px;
     }
 
     /* Unified tag row: collapsed to the first three tags behind a +N chip */
