@@ -197,6 +197,11 @@ body.dnd5e-compact-cards {
       color: var(--color-text-secondary);
       transition: transform 0.15s ease;
     }
+    .dcc-row-total > .dcc-save-toggle {
+      align-self: flex-end;
+      min-height: 28px;
+      padding-inline-end: 6px;
+    }
     .dcc-save-group.collapsed .dcc-save-toggle {
       transform: rotate(180deg);
     }

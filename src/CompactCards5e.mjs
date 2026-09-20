@@ -522,7 +522,8 @@ export class CompactCards5e {
   /**
    * Makes a save row collapse its list of saves. Clicking the row's icon or any empty area of the
    * row toggles the list; clicks on buttons, links and the DC are left alone. The state is kept
-   * per card and ability so re-renders restore it.
+   * per card and ability so re-renders restore it. The chevron goes into the total column when
+   * nothing else is shown there (no DC for this user), so it always sits at the right edge.
    * @param {ChatMessage} origin
    * @param {string} ability
    * @param {HTMLElement} row
@@ -533,7 +534,9 @@ export class CompactCards5e {
     const toggle = document.createElement("span");
     toggle.className = "dcc-save-toggle";
     toggle.innerHTML = `<i class="fa-solid fa-chevron-up" inert></i>`;
-    row.querySelector(".dcc-row-main")?.appendChild(toggle);
+    const total = row.querySelector(".dcc-row-total");
+    const host = total && !total.childElementCount ? total : row.querySelector(".dcc-row-main");
+    host?.appendChild(toggle);
     row.classList.add("dcc-collapsible");
     const setOpen = (open) => {
       wrapper.classList.toggle("collapsed", !open);
