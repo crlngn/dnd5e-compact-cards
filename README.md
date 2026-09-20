@@ -69,3 +69,7 @@ values derived from the card's text color. All classes are prefixed `dcc-`.
 
 Bump `version` in `package.json` on every change that hosts should prefer: the
 registry compares that version to pick which host runs the feature.
+
+## License
+
+[Creative Commons Attribution-NonCommercial 4.0](https://creativecommons.org/licenses/by-nc/4.0/). See the LICENSE file.
