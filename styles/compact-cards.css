@@ -4,8 +4,10 @@ The host module toggles `body.dnd5e-compact-cards` and `body.dnd5e-icon-card-but
 Colors come from the host's chat tokens when it defines them (the `--cui-chat-*` variables of
 Carolingian UI) and fall back to theme-neutral values derived from the card's text color.
 ******************/
-body.dnd5e-compact-cards,
-body.dnd5e-icon-card-buttons {
+/* Tokens are declared on the message itself, not on body: hosts scope their theme tokens to
+   `#interface.theme-*` and `.chat-popout`, and a custom property's fallback resolves where the
+   property is declared, so declaring these on body would only ever see the light defaults */
+:is(body.dnd5e-compact-cards, body.dnd5e-icon-card-buttons) :is(.chat-popout, #chat-log, .chat-log, #chat-notifications) .chat-message {
   --dcc-row-total-width: 52px;
   --dcc-border-radius: var(--crlngn-border-radius, 4px);
   --dcc-button-min-height: var(--cui-chat-button-min-height, 2.5em);
