@@ -1,4 +1,4 @@
-# dnd5e Compact Cards
+# Carolingian UI DnD5e Compact Cards
 
 Compact activity cards for dnd5e 6.0, shared as a git submodule by
 [Carolingian UI](https://github.com/crlngn/crlngn-ui) and
