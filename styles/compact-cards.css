@@ -209,12 +209,24 @@ body.dnd5e-compact-cards {
       display: none;
     }
 
-    /* Adds targeted or selected tokens to the card's targets; shown to the author and the GM */
-    .dcc-save-row .dcc-target-controls {
+    /* Targets row on the card face: buttons that record targeted or selected tokens on the card,
+       then the recorded targets; shown to the author and the GM in place of the system's row */
+    .dcc-card-targets {
+      align-items: center;
+      gap: 8px;
+
+      > .dcc-card-target-pills {
+        flex: 1 1 auto;
+        justify-content: flex-start;
+        margin-inline-start: 0;
+      }
+    }
+    .dcc-target-controls {
       display: inline-flex;
+      flex: 0 0 auto;
       gap: 2px;
     }
-    .dcc-save-row button.dcc-record-targets {
+    button.dcc-record-targets {
       flex: 0 0 auto;
       width: var(--button-size, 24px);
       height: var(--button-size, 24px);

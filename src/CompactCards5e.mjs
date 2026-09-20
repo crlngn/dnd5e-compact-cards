@@ -299,6 +299,7 @@ export class CompactCards5e {
       this.#enrichSummaries(message, content);
       this.#groupSaves(message, content);
       this.#buildTagRow(message, content);
+      this.#buildTargetControls(message, content);
       this.#callHooks("renderCard", COMPACT_CARDS_HOOKS.RENDER_CARD, message, html);
     } catch (error) {
       this.#warn("CompactCards5e.#onRenderChatMessage", [error]);
@@ -479,15 +480,6 @@ export class CompactCards5e {
         row.querySelector(".dcc-row-icon").setAttribute("aria-label", abilityLabel);
         row.querySelector(".dcc-row-icon").setAttribute("data-tooltip", "");
       }
-      if (isSaveActivity && (game.user.isGM || origin.isAuthor)) {
-        const controls = document.createElement("span");
-        controls.className = "dcc-target-controls";
-        controls.append(
-          this.#createRecordTargetsButton(origin, "targeted"),
-          this.#createRecordTargetsButton(origin, "selected")
-        );
-        row.querySelector(".dcc-row-main").prepend(controls);
-      }
       const pills = row.querySelector(".dcc-row-pills");
       if (displayChallenge) {
         if (groupEntries.length) {
@@ -556,6 +548,62 @@ export class CompactCards5e {
       this.#saveStates.set(key, open);
       setOpen(open);
     });
+  }
+
+  /**
+   * Adds a targets row to the card face for the GM and the card's author: the buttons that record
+   * the user's targeted or selected tokens on the card, followed by the recorded targets. It sits
+   * between the tag row and the action buttons and replaces the system's own targets row, so it is
+   * available on every activity card, not only on saves. Save activities list their targets in
+   * the save section instead, so their row carries only the buttons.
+   * @param {ChatMessage} origin
+   * @param {HTMLElement} content
+   */
+  #buildTargetControls(origin, content) {
+    if (!(game.user.isGM || origin.isAuthor)) return;
+    const face = content.querySelector(".chat-card");
+    if (!face || face.querySelector(":scope > .dcc-card-targets")) return;
+    const activity = origin.getAssociatedActivity?.();
+    const isSaveActivity = activity?.type === "save";
+
+    const row = document.createElement("section");
+    row.className = "icon-row dcc-card-targets";
+    row.innerHTML = `<i class="fa-fw fa-solid fa-bullseye" aria-label="${game.i18n.localize("DND5E.CHATMESSAGE.Row.Targets")}"></i>`;
+    const controls = document.createElement("span");
+    controls.className = "dcc-target-controls";
+    controls.append(
+      this.#createRecordTargetsButton(origin, "targeted"),
+      this.#createRecordTargetsButton(origin, "selected")
+    );
+    row.appendChild(controls);
+
+    if (!isSaveActivity) {
+      const targets = origin.system?.targets ?? [];
+      const pills = document.createElement("ul");
+      pills.className = "pills unlist targets dcc-card-target-pills";
+      for (const target of targets) {
+        const li = document.createElement("li");
+        li.className = "pill target transparent";
+        li.textContent = target.name ?? "";
+        if (target.token) li.dataset.tokenUuid = target.token;
+        pills.appendChild(li);
+      }
+      if (!targets.length) {
+        const li = document.createElement("li");
+        li.className = "none pill target transparent";
+        li.textContent = game.i18n.localize("DND5E.Tokens.NoTargets");
+        pills.appendChild(li);
+      }
+      row.appendChild(pills);
+    }
+
+    const recorded = face.querySelector(":scope > recorded-targets");
+    recorded?.classList.add("dcc-merged-targets");
+    const rows = Array.from(face.querySelectorAll(":scope > .icon-row"));
+    const buttonsRow = rows.find(r => r.querySelector(":scope > ul.unlist:not(.pills)"));
+    if (recorded) recorded.before(row);
+    else if (buttonsRow) buttonsRow.before(row);
+    else face.appendChild(row);
   }
 
   /**
