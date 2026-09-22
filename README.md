@@ -25,13 +25,14 @@ Hooks.once("init", () => {
       compactCards: () => game.settings.get("my-module", "compact-activity-cards"),
       setCompactCards: value => game.settings.set("my-module", "compact-activity-cards", value),
       collapseTags: () => game.settings.get("my-module", "collapse-card-tags"),
-      labeledButtons: () => game.settings.get("my-module", "labeled-card-buttons")
+      labeledButtons: () => game.settings.get("my-module", "labeled-card-buttons"),
+      retroAdvantage: () => game.settings.get("my-module", "retro-advantage-buttons")
     },
     hooks: { renderRoll: "my-module.renderCompactRoll", renderCard: "my-module.renderCompactCard" },
     log: (ref, data) => console.debug(ref, ...data)
   });
   // Call cards.applyCompactCards(value) / applyCollapseTags(value) / applyLabeledButtons(value)
-  // from the settings' onChange handlers.
+  // / applyRetroAdvantage(value) from the settings' onChange handlers.
 });
 ```
 
@@ -59,8 +60,9 @@ compact cards are in effect on this client regardless of which host runs them.
 
 ## Retroactive advantage
 
-Attack rows carry two buttons flanking the total, angles up on the left and angles
-down on the right, for the roll's author and the GM, that apply advantage or disadvantage to a roll after it was made; clicking the active one
+Attack rows, save entries, check summaries and standalone check and save cards carry
+two buttons flanking the total, angles up on the left and angles down on the right,
+for the roll's author and the GM, that apply advantage or disadvantage to a roll after it was made; clicking the active one
 returns the roll to normal. The change rolls one extra d20 (two with Elven
 Accuracy), shown through Dice So Nice when present, partitions the results the
 way the system does, recomputes the total and formula, and updates the message's
@@ -68,9 +70,10 @@ rolls and flavor. Every d20 rolled for a message is kept under
 `flags.<host>.retroAdvantage.pool`, so switching modes back and forth reuses the
 same dice instead of rolling new ones, and the original mode is kept so a changed
 roll shows a marked pill. Rolls with rerolls or explosions on the d20 are left
-alone, as are all rolls when Ready Set Roll is active. `instance.setAdvantageMode(
-rollMessage, mode)` exposes the same operation for macros, with `mode` one of
-`CONFIG.Dice.D20Roll.ADV_MODE`.
+alone, as are all rolls when Ready Set Roll is active or the host's optional
+`retroAdvantage` setting is off. `instance.setAdvantageMode(
+rollMessage, mode, rollIndex?)` exposes the same operation for macros, with `mode`
+one of `CONFIG.Dice.D20Roll.ADV_MODE`.
 
 ## Hooks
 

@@ -69,6 +69,7 @@ const READY_SET_ROLL_ID = "ready-set-roll-5e";
  * @property {(value: boolean) => Promise<void>|void} [setCompactCards] - Writes the host's compact cards setting, so it follows the dnd5e "Summary Chat Cards" setting when the user changes that one instead
  * @property {() => boolean} collapseTags - Whether the host's collapse tags setting is on
  * @property {() => boolean} labeledButtons - Whether the host's labeled buttons setting is on
+ * @property {() => boolean} [retroAdvantage] - Whether the host's retroactive advantage buttons setting is on; treated as on when missing
  */
 
 /**
@@ -320,6 +321,15 @@ export class CompactCards5e {
   }
 
   /**
+   * Applies the retroactive advantage buttons setting by re-rendering the chat log
+   * @param {boolean} [value] - New setting value, when called from a setting change
+   */
+  applyRetroAdvantage(value) {
+    if (!this.activated) return;
+    this.#rerenderChat();
+  }
+
+  /**
    * Applies the labeled buttons setting through a body class. Like the rest of the feature this
    * only acts on dnd5e 6.0+, where the cards it styles exist.
    * @param {boolean} [value] - New setting value, when called from a setting change
@@ -401,9 +411,12 @@ export class CompactCards5e {
    */
   #onRenderChatMessage = (message, html) => {
     if (!this.isActive) return;
-    if (message.type !== "usage") return;
     const content = html?.querySelector?.(".message-content");
     if (!content) return;
+    if (message.type !== "usage") {
+      this.#enrichStandaloneRoll(message, content);
+      return;
+    }
     try {
       this.#enrichSummaries(message, content);
       this.#groupSaves(message, content);
@@ -449,6 +462,67 @@ export class CompactCards5e {
       this.#wireDrawer(origin, rollMessage, row, drawer);
       this.#callHooks("renderRoll", COMPACT_CARDS_HOOKS.RENDER_ROLL, { origin, rollMessage, summary, row, drawer });
     }
+    for (const summary of summaries) {
+      const rollMessage = game.messages.get(summary.dataset.messageId);
+      if (rollMessage?.type === "check") this.#enrichSystemRollRows(rollMessage, summary);
+    }
+  }
+
+  /**
+   * Adds the advantage pill and buttons to the roll rows of a message the system rendered with its
+   * own templates: a check summary inside a usage card, or a standalone check or save card. Each
+   * roll row is an icon row holding the roll's total button; the pill goes on the first pill list
+   * of the element, which names the target on summaries.
+   * @param {ChatMessage} rollMessage
+   * @param {HTMLElement} element - The summary or message content element
+   */
+  #enrichSystemRollRows(rollMessage, element) {
+    if (!rollMessage.isContentVisible) return;
+    const buttons = Array.from(element.querySelectorAll(".icon-row > button.dice-roll"));
+    const pills = element.querySelector(".icon-row > ul.pills");
+    for (const [index, button] of buttons.entries()) {
+      if (button.closest(".dcc-roll-row, .dcc-save-list")) continue;
+      this.#addAdvantage(rollMessage, index, button, index === 0 ? pills : null);
+    }
+  }
+
+  /**
+   * Adds the advantage buttons to a check or save message rendered as its own card, i.e. one not
+   * folded into a usage card. Death saves are left alone.
+   * @param {ChatMessage} message
+   * @param {HTMLElement} content
+   */
+  #enrichStandaloneRoll(message, content) {
+    if (message.type !== "check" && message.type !== "save") return;
+    if (message.system?.type === "death") return;
+    if (message.system?.origin?.system?.rendersSummaries) return;
+    try {
+      this.#enrichSystemRollRows(message, content);
+    } catch (error) {
+      this.#warn("CompactCards5e.#enrichStandaloneRoll", [error]);
+    }
+  }
+
+  /**
+   * Adds, for one d20 roll of a message, the pill naming its advantage mode and, for users who may
+   * change it, the two buttons flanking its total button
+   * @param {ChatMessage} rollMessage
+   * @param {number} index - Index of the roll in the message's rolls
+   * @param {HTMLElement|null} diceButton - The roll's total button
+   * @param {HTMLElement|null} pills - Pill list the mode pill is appended to, if any
+   */
+  #addAdvantage(rollMessage, index, diceButton, pills) {
+    const roll = rollMessage.rolls[index];
+    if (!roll?.validD20Roll) return;
+    if (pills) {
+      const pill = this.#createAdvantagePill(rollMessage, roll);
+      if (pill) pills.appendChild(pill);
+    }
+    if (!diceButton || !this.#canChangeAdvantage(rollMessage, roll)) return;
+    const [up, down] = this.#createAdvantageControls(rollMessage, roll, index);
+    diceButton.parentElement?.classList.add("dcc-with-advantage");
+    diceButton.before(up);
+    diceButton.after(down);
   }
 
   /**
@@ -466,13 +540,9 @@ export class CompactCards5e {
     }
 
     if (!rollMessage.isContentVisible) return;
-    const d20Roll = rollMessage.rolls.find(r => r?.validD20Roll);
-    if (d20Roll && pills) {
-      const advantagePill = this.#createAdvantagePill(rollMessage, d20Roll);
-      if (advantagePill) pills.appendChild(advantagePill);
-    }
-    if (d20Roll && this.#canChangeAdvantage(rollMessage, d20Roll)) {
-      this.#placeAdvantageControls(row, this.#createAdvantageControls(rollMessage, d20Roll));
+    const index = rollMessage.rolls.findIndex(r => r?.validD20Roll);
+    if (index >= 0) {
+      this.#addAdvantage(rollMessage, index, row.querySelector(".dcc-row-total > button.dice-roll"), pills);
     }
     for (const roll of rollMessage.rolls) {
       const line = this.#buildD20Line(roll);
@@ -514,6 +584,7 @@ export class CompactCards5e {
    * @returns {boolean}
    */
   #canChangeAdvantage(rollMessage, roll) {
+    if (!this.#setting("retroAdvantage")) return false;
     if (game.modules.get(READY_SET_ROLL_ID)?.active) return false;
     if (!rollMessage.canUserModify?.(game.user, "update")) return false;
     if (!roll?._evaluated || !roll.validD20Roll) return false;
@@ -527,10 +598,11 @@ export class CompactCards5e {
    * roll after it was made. The active mode's button is highlighted, and clicking it returns the
    * roll to normal. Both buttons are disabled while a change is in flight.
    * @param {ChatMessage} rollMessage
-   * @param {Roll} roll - The message's d20 roll
+   * @param {Roll} roll - The d20 roll the buttons act on
+   * @param {number} index - Index of that roll in the message's rolls
    * @returns {[HTMLButtonElement, HTMLButtonElement]} The advantage and disadvantage buttons
    */
-  #createAdvantageControls(rollMessage, roll) {
+  #createAdvantageControls(rollMessage, roll, index) {
     const ADV_MODE = CONFIG.Dice.D20Roll.ADV_MODE;
     const current = roll.options?.advantageMode ?? ADV_MODE.NORMAL;
     const entries = [
@@ -553,7 +625,7 @@ export class CompactCards5e {
         if (buttons.some(b => b.disabled)) return;
         buttons.forEach(b => { b.disabled = true; });
         try {
-          await this.setAdvantageMode(rollMessage, active ? ADV_MODE.NORMAL : mode);
+          await this.setAdvantageMode(rollMessage, active ? ADV_MODE.NORMAL : mode, index);
         } catch (error) {
           this.#warn("CompactCards5e.setAdvantageMode", [error]);
           ui.notifications?.warn(this.#localize("retroFailed"));
@@ -567,25 +639,6 @@ export class CompactCards5e {
   }
 
   /**
-   * Puts the advantage buttons in the row's total column, one on each side of the total, so the
-   * row reads "advantage, total, disadvantage". Without a total button they go at the end of the
-   * row's main area instead.
-   * @param {HTMLElement} row
-   * @param {[HTMLButtonElement, HTMLButtonElement]} buttons - The advantage and disadvantage buttons
-   */
-  #placeAdvantageControls(row, [up, down]) {
-    const total = row.querySelector(".dcc-row-total");
-    const dice = total?.querySelector(":scope > button.dice-roll");
-    if (!total || !dice) {
-      row.querySelector(".dcc-row-main")?.append(up, down);
-      return;
-    }
-    total.classList.add("dcc-with-advantage");
-    dice.before(up);
-    dice.after(down);
-  }
-
-  /**
    * Changes the advantage mode of an already rolled d20 roll and stores the result on its message.
    * Every d20 value ever rolled for the message is kept in a flag, so switching modes back and
    * forth reuses the same dice instead of rolling new ones; a die is only rolled when the pool
@@ -593,19 +646,21 @@ export class CompactCards5e {
    * advantage (of three with Elven Accuracy), the lowest for disadvantage, and the first rolled
    * for a normal roll. Hit or miss, critical and fumble follow from the new total when the card
    * re-renders.
-   * @param {ChatMessage} rollMessage - An attack or other d20 roll message
+   * @param {ChatMessage} rollMessage - An attack, check, save or other d20 roll message
    * @param {number} mode - One of `CONFIG.Dice.D20Roll.ADV_MODE`
+   * @param {number} [rollIndex] - Index of the roll to change; defaults to the message's first d20 roll
    * @returns {Promise<ChatMessage|null>} The updated message, or null when nothing changed
    */
-  async setAdvantageMode(rollMessage, mode) {
+  async setAdvantageMode(rollMessage, mode, rollIndex) {
     const ADV_MODE = CONFIG.Dice.D20Roll.ADV_MODE;
-    const index = rollMessage.rolls.findIndex(r => r?.validD20Roll);
+    const index = rollIndex ?? rollMessage.rolls.findIndex(r => r?.validD20Roll);
     const roll = rollMessage.rolls[index];
     if (!roll || !this.#canChangeAdvantage(rollMessage, roll)) return null;
     const current = roll.options.advantageMode ?? ADV_MODE.NORMAL;
     if (current === mode) return null;
     const die = roll.d20;
-    const stored = rollMessage.getFlag(this.options.id, RETRO_FLAG) ?? {};
+    const flag = rollMessage.getFlag(this.options.id, RETRO_FLAG);
+    const stored = flag && (flag.index ?? index) === index ? flag : {};
     const rolled = die.results.map(r => r.result);
     const pool = [...rolled, ...(stored.pool ?? []).slice(rolled.length)];
     const elvenAccuracy = mode === ADV_MODE.ADVANTAGE && die.options.elvenAccuracy === true;
@@ -632,7 +687,8 @@ export class CompactCards5e {
       [`flags.${this.options.id}.${RETRO_FLAG}`]: {
         original: stored.original ?? current,
         mode,
-        pool
+        pool,
+        index
       }
     });
   }
@@ -820,6 +876,13 @@ export class CompactCards5e {
         this.#fillSaveTargets(origin, groupEntries, list);
       } else {
         for (const entry of groupEntries) list.appendChild(entry.summary);
+      }
+      for (const entry of groupEntries) {
+        if (!entry.message.isContentVisible) continue;
+        const index = entry.message.rolls.findIndex(r => r?.validD20Roll);
+        if (index < 0) continue;
+        const line = entry.summary.querySelector(".save-summary");
+        this.#addAdvantage(entry.message, index, line?.querySelector(":scope > button.dice-roll"), line?.querySelector(":scope > ul.pills"));
       }
     }
 

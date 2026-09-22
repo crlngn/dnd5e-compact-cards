@@ -254,6 +254,23 @@ body.dnd5e-compact-cards {
         min-width: 0;
       }
     }
+    /* Save entries and the system's own roll rows (check summaries, standalone check and save
+       cards) keep their leading icon spacing while the buttons hug the total */
+    .save-summary.dcc-with-advantage,
+    .icon-row.dcc-with-advantage {
+      gap: 2px;
+
+      > i {
+        margin-inline-end: 6px;
+      }
+      > ul.pills {
+        margin-inline-end: 6px;
+      }
+    }
+    /* A flanked save total still spans the DC column above it */
+    .dcc-save-list .save-summary.dcc-with-advantage > button.dice-roll {
+      min-width: calc(var(--dcc-row-total-width) - 2 * var(--dcc-advantage-width, 16px) - 4px);
+    }
     button.dcc-advantage-button {
       flex: 0 0 var(--dcc-advantage-width, 16px);
       width: var(--dcc-advantage-width, 16px);
