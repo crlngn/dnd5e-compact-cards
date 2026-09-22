@@ -1,7 +1,8 @@
 {
   "_comment": "Reference strings. Copy this block under the i18nPrefix the host passes to registerCompactCards and translate it in every language the host ships.",
-  "enabledSummarySetting": "This module turned on the dnd5e client setting 'Summarize Chat Cards', which compact activity cards need.",
-  "needsSummarySetting": "Compact activity cards need the dnd5e setting 'Summarize Chat Cards' to be enabled.",
+  "enabledSummarySetting": "This module turned on the dnd5e client setting 'Summary Chat Cards' to match its compact activity cards setting.",
+  "disabledSummarySetting": "This module turned off the dnd5e client setting 'Summary Chat Cards' to match its compact activity cards setting.",
+  "needsSummarySetting": "Compact activity cards need the dnd5e setting 'Summary Chat Cards' to be enabled.",
   "pendingSave": "Has not rolled yet",
   "addTargeted": "Add targeted tokens as targets",
   "addSelected": "Add selected tokens as targets",

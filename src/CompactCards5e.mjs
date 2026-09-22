@@ -54,9 +54,13 @@ export const COMPACT_CARDS_BODY_CLASS = "dnd5e-compact-cards";
 /** Body class set while card buttons are icon-only */
 export const ICON_BUTTONS_BODY_CLASS = "dnd5e-icon-card-buttons";
 
+/** Key of the dnd5e "Summary Chat Cards" client setting compact cards build on, kept in sync with the host's setting */
+export const DND5E_SUMMARY_SETTING = "chatCardSummary";
+
 /**
  * @typedef {Object} CompactCardsSettings
  * @property {() => boolean} compactCards - Whether the host's compact cards setting is on
+ * @property {(value: boolean) => Promise<void>|void} [setCompactCards] - Writes the host's compact cards setting, so it follows the dnd5e "Summary Chat Cards" setting when the user changes that one instead
  * @property {() => boolean} collapseTags - Whether the host's collapse tags setting is on
  * @property {() => boolean} labeledButtons - Whether the host's labeled buttons setting is on
  */
@@ -102,6 +106,8 @@ export class CompactCards5e {
   #tagStates = new Map();
   /** @type {Map<string, boolean>} Open state of save sections, keyed by `${originId}:${ability}` */
   #saveStates = new Map();
+  /** @type {boolean} Whether a setting write started by this copy is in progress, so its change is not mirrored back */
+  #syncing = false;
 
   /**
    * @param {CompactCardsOptions} options
@@ -153,10 +159,12 @@ export class CompactCards5e {
     foundry.applications.handlebars.loadTemplates(Object.values(this.#summaryTemplates));
     this.#patchSummaryTemplates();
     Hooks.on("dnd5e.renderChatMessage", this.#onRenderChatMessage);
+    Hooks.on("clientSettingChanged", this.#onClientSettingChanged);
+    Hooks.on("updateSetting", this.#onUpdateSetting);
     this.applyCompactCards(undefined, false);
     Hooks.once("ready", () => {
       this.applyCompactCards(undefined, false);
-      this.#reportInactive();
+      this.#syncSummarySetting(this.#setting("compactCards"), true);
     });
   }
 
@@ -170,35 +178,114 @@ export class CompactCards5e {
   }
 
   /**
-   * When the user enabled compact cards but they cannot take effect, either turns on the dnd5e
-   * "Summarize Chat Cards" client setting they depend on, or logs the reason support was declined
+   * Makes the dnd5e "Summary Chat Cards" setting match the host's compact cards setting, then
+   * applies the result. At load the host's setting is the source of truth and the user is told
+   * when the dnd5e setting had to change; after a user interaction the change is mirrored silently.
+   * @param {boolean} value - Desired state of both settings
+   * @param {boolean} [notify=false] - Whether to notify the user when the dnd5e setting was changed
    */
-  async #reportInactive() {
-    if (!this.#setting("compactCards") || this.isActive) return;
+  async #syncSummarySetting(value, notify = false) {
+    if (!this.activated) return;
     if (!this.isSupported) {
-      this.#log("CompactCards5e: compact activity cards are enabled but inactive", [this.unsupportedReason]);
+      if (value) this.#log("CompactCards5e: compact activity cards are enabled but inactive", [this.unsupportedReason]);
       return;
     }
+    const current = this.#getSummarySetting();
+    if (current !== null && current !== value) {
+      this.#syncing = true;
+      try {
+        await game.settings.set("dnd5e", DND5E_SUMMARY_SETTING, value);
+        if (notify) ui.notifications?.info(this.#localize(value ? "enabledSummarySetting" : "disabledSummarySetting"));
+      } catch (error) {
+        this.#warn("CompactCards5e: could not change the dnd5e chatCardSummary setting", [error]);
+        if (value) ui.notifications?.warn(this.#localize("needsSummarySetting"));
+      } finally {
+        this.#syncing = false;
+      }
+    }
+    this.#refreshSummarySettingInputs();
+    this.applyCompactCards();
+  }
+
+  /**
+   * Updates the "Summary Chat Cards" checkbox in any open settings form to the stored value.
+   * Foundry's settings window does not re-render when a setting changes underneath it, so
+   * without this a later save of that window would write its stale value back.
+   */
+  #refreshSummarySettingInputs() {
+    const value = this.#getSummarySetting();
+    if (value === null) return;
+    const inputs = document.querySelectorAll(`form input[type="checkbox"][name="dnd5e.${DND5E_SUMMARY_SETTING}"]`);
+    for (const input of inputs) input.checked = value;
+  }
+
+  /**
+   * Mirrors a change of the dnd5e "Summary Chat Cards" setting made outside this copy onto the
+   * host's compact cards setting, so the user's last interaction wins whichever setting it touched.
+   * Hosts that provide no setter only get the display refreshed.
+   */
+  async #mirrorSummarySetting() {
+    if (!this.activated || !this.isSupported || this.#syncing) return;
+    const wanted = this.#getSummarySetting();
+    const setter = this.options.settings?.setCompactCards;
+    if (wanted !== null && setter && this.#setting("compactCards") !== wanted) {
+      this.#syncing = true;
+      try {
+        await setter(wanted);
+      } catch (error) {
+        this.#warn("CompactCards5e: could not change the host's compact cards setting", [error]);
+      } finally {
+        this.#syncing = false;
+      }
+    }
+    this.applyCompactCards();
+  }
+
+  /**
+   * Current value of the dnd5e "Summary Chat Cards" setting, or null when it is not registered
+   * @returns {boolean|null}
+   */
+  #getSummarySetting() {
     try {
-      await game.settings.set("dnd5e", "chatCardSummary", true);
-      ui.notifications?.info(this.#localize("enabledSummarySetting"));
-      this.applyCompactCards();
+      return game.settings.get("dnd5e", DND5E_SUMMARY_SETTING) !== false;
     } catch (error) {
-      this.#warn("CompactCards5e: could not enable the dnd5e chatCardSummary setting", [error]);
-      ui.notifications?.warn(this.#localize("needsSummarySetting"));
+      return null;
     }
   }
 
   /**
-   * Applies the compact cards setting: body class and, unless skipped, a chat log re-render
+   * Listens for client-scope changes of the dnd5e "Summary Chat Cards" setting
+   * @param {string} key - Namespaced setting key
+   */
+  #onClientSettingChanged = (key) => {
+    if (key !== `dnd5e.${DND5E_SUMMARY_SETTING}`) return;
+    this.#mirrorSummarySetting();
+  };
+
+  /**
+   * Listens for world-scope changes of the summary setting, should a system version store it per world
+   * @param {Setting} setting - The updated Setting document
+   */
+  #onUpdateSetting = (setting) => {
+    if (setting?.key !== `dnd5e.${DND5E_SUMMARY_SETTING}`) return;
+    this.#mirrorSummarySetting();
+  };
+
+  /**
+   * Applies the compact cards setting: body class and, unless skipped, a chat log re-render.
+   * When called with a new value from the host's setting change, the dnd5e "Summary Chat Cards"
+   * setting is first brought in line with it and the display is refreshed once that is done.
    * @param {boolean} [value] - New setting value, when called from a setting change
    * @param {boolean} [rerender=true]
    */
   applyCompactCards(value, rerender = true) {
     if (!this.activated) return;
+    if (value !== undefined) {
+      this.#syncSummarySetting(value);
+      return;
+    }
     document.body.classList.toggle(COMPACT_CARDS_BODY_CLASS, this.isActive);
     if (rerender) this.#rerenderChat();
-    if (value !== undefined) this.#reportInactive();
   }
 
   /**

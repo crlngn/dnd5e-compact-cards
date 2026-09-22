@@ -23,6 +23,7 @@ Hooks.once("init", () => {
     i18nPrefix: "MY_MODULE.compactCards",
     settings: {
       compactCards: () => game.settings.get("my-module", "compact-activity-cards"),
+      setCompactCards: value => game.settings.set("my-module", "compact-activity-cards", value),
       collapseTags: () => game.settings.get("my-module", "collapse-card-tags"),
       labeledButtons: () => game.settings.get("my-module", "labeled-card-buttons")
     },
@@ -33,6 +34,13 @@ Hooks.once("init", () => {
   // from the settings' onChange handlers.
 });
 ```
+
+The host's compact cards setting and the dnd5e "Summary Chat Cards" client setting
+(`dnd5e.chatCardSummary`) are kept in sync. At `ready` the host's setting is the
+source of truth and the dnd5e setting is changed to match it, with a notification.
+Afterwards the user's last interaction wins: `applyCompactCards(value)` writes the
+dnd5e setting, and a change of the dnd5e setting is written back through the
+optional `setCompactCards` setter. Without the setter the display is only refreshed.
 
 Build steps for a host:
 
