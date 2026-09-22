@@ -57,6 +57,21 @@ copies install nothing and expose the winner through `instance.handledBy`, so th
 settings can show a hint. `globalThis.dnd5eCompactCards.isActive` reports whether
 compact cards are in effect on this client regardless of which host runs them.
 
+## Retroactive advantage
+
+Attack rows carry two buttons flanking the total, angles up on the left and angles
+down on the right, for the roll's author and the GM, that apply advantage or disadvantage to a roll after it was made; clicking the active one
+returns the roll to normal. The change rolls one extra d20 (two with Elven
+Accuracy), shown through Dice So Nice when present, partitions the results the
+way the system does, recomputes the total and formula, and updates the message's
+rolls and flavor. Every d20 rolled for a message is kept under
+`flags.<host>.retroAdvantage.pool`, so switching modes back and forth reuses the
+same dice instead of rolling new ones, and the original mode is kept so a changed
+roll shows a marked pill. Rolls with rerolls or explosions on the d20 are left
+alone, as are all rolls when Ready Set Roll is active. `instance.setAdvantageMode(
+rollMessage, mode)` exposes the same operation for macros, with `mode` one of
+`CONFIG.Dice.D20Roll.ADV_MODE`.
+
 ## Hooks
 
 - `dnd5e-compact-cards.renderRoll` `({ origin, rollMessage, summary, row, drawer })`

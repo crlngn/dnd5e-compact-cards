@@ -57,6 +57,12 @@ export const ICON_BUTTONS_BODY_CLASS = "dnd5e-icon-card-buttons";
 /** Key of the dnd5e "Summary Chat Cards" client setting compact cards build on, kept in sync with the host's setting */
 export const DND5E_SUMMARY_SETTING = "chatCardSummary";
 
+/** Flag, under the host module's scope, recording a roll whose advantage mode was changed after the fact */
+export const RETRO_FLAG = "retroAdvantage";
+
+/** Module that provides its own retroactive advantage buttons, so this feature stays out of its way */
+const READY_SET_ROLL_ID = "ready-set-roll-5e";
+
 /**
  * @typedef {Object} CompactCardsSettings
  * @property {() => boolean} compactCards - Whether the host's compact cards setting is on
@@ -161,6 +167,7 @@ export class CompactCards5e {
     Hooks.on("dnd5e.renderChatMessage", this.#onRenderChatMessage);
     Hooks.on("clientSettingChanged", this.#onClientSettingChanged);
     Hooks.on("updateSetting", this.#onUpdateSetting);
+    Hooks.on("updateChatMessage", this.#onUpdateChatMessage);
     this.applyCompactCards(undefined, false);
     Hooks.once("ready", () => {
       this.applyCompactCards(undefined, false);
@@ -269,6 +276,20 @@ export class CompactCards5e {
   #onUpdateSetting = (setting) => {
     if (setting?.key !== `dnd5e.${DND5E_SUMMARY_SETTING}`) return;
     this.#mirrorSummarySetting();
+  };
+
+  /**
+   * Re-renders the usage card a roll message is folded into when the message's rolls change. The
+   * system only refreshes the origin on changes to a roll message's system data, so a roll changed
+   * after the fact would otherwise keep showing its old total in the card.
+   * @param {ChatMessage} message
+   * @param {object} changed
+   */
+  #onUpdateChatMessage = (message, changed) => {
+    if (!this.isActive || !("rolls" in (changed ?? {}))) return;
+    const origin = message.system?.origin;
+    if (!origin?.system?.rendersSummaries) return;
+    for (const log of [ui.chat, ui.chat?.popout]) log?.updateMessage?.(origin);
   };
 
   /**
@@ -445,10 +466,207 @@ export class CompactCards5e {
     }
 
     if (!rollMessage.isContentVisible) return;
+    const d20Roll = rollMessage.rolls.find(r => r?.validD20Roll);
+    if (d20Roll && pills) {
+      const advantagePill = this.#createAdvantagePill(rollMessage, d20Roll);
+      if (advantagePill) pills.appendChild(advantagePill);
+    }
+    if (d20Roll && this.#canChangeAdvantage(rollMessage, d20Roll)) {
+      this.#placeAdvantageControls(row, this.#createAdvantageControls(rollMessage, d20Roll));
+    }
     for (const roll of rollMessage.rolls) {
       const line = this.#buildD20Line(roll);
       if (line) drawer.prepend(line);
     }
+  }
+
+  /**
+   * Pill naming the roll's advantage mode, marked when the mode was changed after the roll
+   * @param {ChatMessage} rollMessage
+   * @param {Roll} roll - The message's d20 roll
+   * @returns {HTMLElement|null}
+   */
+  #createAdvantagePill(rollMessage, roll) {
+    const ADV_MODE = CONFIG.Dice.D20Roll.ADV_MODE;
+    const mode = roll.options?.advantageMode ?? ADV_MODE.NORMAL;
+    const retro = rollMessage.getFlag(this.options.id, RETRO_FLAG);
+    const changed = retro && retro.original !== mode;
+    if (mode === ADV_MODE.NORMAL && !changed) return null;
+    const label = mode === ADV_MODE.ADVANTAGE ? game.i18n.localize("DND5E.Advantage")
+      : mode === ADV_MODE.DISADVANTAGE ? game.i18n.localize("DND5E.Disadvantage")
+        : this.#localize("normalRoll");
+    const pill = this.#createPill(label, "dcc-row-tag dcc-advantage-tag");
+    if (changed) {
+      pill.classList.add("changed");
+      pill.setAttribute("aria-label", `${label}: ${this.#localize("retroChanged")}`);
+      pill.setAttribute("data-tooltip", "");
+      pill.insertAdjacentHTML("afterbegin", `<i class="fa-solid fa-clock-rotate-left" inert></i>`);
+    }
+    return pill;
+  }
+
+  /**
+   * Whether the current user may change this roll's advantage mode after the fact: the message
+   * must be theirs or they must be the GM, the d20 must be a plain single die without rerolls or
+   * explosions, and Ready Set Roll must not be providing the same controls.
+   * @param {ChatMessage} rollMessage
+   * @param {Roll} roll - The message's d20 roll
+   * @returns {boolean}
+   */
+  #canChangeAdvantage(rollMessage, roll) {
+    if (game.modules.get(READY_SET_ROLL_ID)?.active) return false;
+    if (!rollMessage.canUserModify?.(game.user, "update")) return false;
+    if (!roll?._evaluated || !roll.validD20Roll) return false;
+    const die = roll.d20;
+    if (!die || die.number !== 1 || die.faces !== 20) return false;
+    return die.results.every(r => !r.rerolled && !r.exploded);
+  }
+
+  /**
+   * Creates the two buttons that apply advantage (angles up) or disadvantage (angles down) to a
+   * roll after it was made. The active mode's button is highlighted, and clicking it returns the
+   * roll to normal. Both buttons are disabled while a change is in flight.
+   * @param {ChatMessage} rollMessage
+   * @param {Roll} roll - The message's d20 roll
+   * @returns {[HTMLButtonElement, HTMLButtonElement]} The advantage and disadvantage buttons
+   */
+  #createAdvantageControls(rollMessage, roll) {
+    const ADV_MODE = CONFIG.Dice.D20Roll.ADV_MODE;
+    const current = roll.options?.advantageMode ?? ADV_MODE.NORMAL;
+    const entries = [
+      { mode: ADV_MODE.ADVANTAGE, icon: "fa-angles-up", key: "retroAdvantage", side: "up" },
+      { mode: ADV_MODE.DISADVANTAGE, icon: "fa-angles-down", key: "retroDisadvantage", side: "down" }
+    ];
+    const buttons = entries.map(({ mode, icon, key, side }) => {
+      const active = current === mode;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `unbutton dcc-advantage-button dcc-advantage-${side}`;
+      button.dataset.mode = String(mode);
+      button.setAttribute("aria-pressed", String(active));
+      button.setAttribute("aria-label", this.#localize(active ? "retroNormal" : key));
+      button.setAttribute("data-tooltip", "");
+      button.innerHTML = `<i class="fa-solid ${icon}" inert></i>`;
+      button.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (buttons.some(b => b.disabled)) return;
+        buttons.forEach(b => { b.disabled = true; });
+        try {
+          await this.setAdvantageMode(rollMessage, active ? ADV_MODE.NORMAL : mode);
+        } catch (error) {
+          this.#warn("CompactCards5e.setAdvantageMode", [error]);
+          ui.notifications?.warn(this.#localize("retroFailed"));
+        } finally {
+          buttons.forEach(b => { b.disabled = false; });
+        }
+      });
+      return button;
+    });
+    return /** @type {[HTMLButtonElement, HTMLButtonElement]} */ (buttons);
+  }
+
+  /**
+   * Puts the advantage buttons in the row's total column, one on each side of the total, so the
+   * row reads "advantage, total, disadvantage". Without a total button they go at the end of the
+   * row's main area instead.
+   * @param {HTMLElement} row
+   * @param {[HTMLButtonElement, HTMLButtonElement]} buttons - The advantage and disadvantage buttons
+   */
+  #placeAdvantageControls(row, [up, down]) {
+    const total = row.querySelector(".dcc-row-total");
+    const dice = total?.querySelector(":scope > button.dice-roll");
+    if (!total || !dice) {
+      row.querySelector(".dcc-row-main")?.append(up, down);
+      return;
+    }
+    total.classList.add("dcc-with-advantage");
+    dice.before(up);
+    dice.after(down);
+  }
+
+  /**
+   * Changes the advantage mode of an already rolled d20 roll and stores the result on its message.
+   * Every d20 value ever rolled for the message is kept in a flag, so switching modes back and
+   * forth reuses the same dice instead of rolling new ones; a die is only rolled when the pool
+   * is short, and shown through Dice So Nice when present. The kept die is the highest for
+   * advantage (of three with Elven Accuracy), the lowest for disadvantage, and the first rolled
+   * for a normal roll. Hit or miss, critical and fumble follow from the new total when the card
+   * re-renders.
+   * @param {ChatMessage} rollMessage - An attack or other d20 roll message
+   * @param {number} mode - One of `CONFIG.Dice.D20Roll.ADV_MODE`
+   * @returns {Promise<ChatMessage|null>} The updated message, or null when nothing changed
+   */
+  async setAdvantageMode(rollMessage, mode) {
+    const ADV_MODE = CONFIG.Dice.D20Roll.ADV_MODE;
+    const index = rollMessage.rolls.findIndex(r => r?.validD20Roll);
+    const roll = rollMessage.rolls[index];
+    if (!roll || !this.#canChangeAdvantage(rollMessage, roll)) return null;
+    const current = roll.options.advantageMode ?? ADV_MODE.NORMAL;
+    if (current === mode) return null;
+    const die = roll.d20;
+    const stored = rollMessage.getFlag(this.options.id, RETRO_FLAG) ?? {};
+    const rolled = die.results.map(r => r.result);
+    const pool = [...rolled, ...(stored.pool ?? []).slice(rolled.length)];
+    const elvenAccuracy = mode === ADV_MODE.ADVANTAGE && die.options.elvenAccuracy === true;
+    const needed = mode === ADV_MODE.NORMAL ? 1 : (elvenAccuracy ? 3 : 2);
+    while (pool.length < needed) pool.push(await this.#rollExtraD20(rollMessage));
+
+    const values = pool.slice(0, needed);
+    const kept = mode === ADV_MODE.NORMAL ? 0
+      : values.indexOf(mode === ADV_MODE.ADVANTAGE ? Math.max(...values) : Math.min(...values));
+    die.applyAdvantage(mode);
+    die.results = values.map((result, i) => (i === kept
+      ? { result, active: true }
+      : { result, active: false, discarded: true }));
+    roll.options.advantageMode = mode;
+    roll.options.advantage = mode === ADV_MODE.ADVANTAGE;
+    roll.options.disadvantage = mode === ADV_MODE.DISADVANTAGE;
+    roll._total = roll._evaluateTotal();
+    roll.resetFormula();
+
+    const rolls = rollMessage.rolls.map((r, i) => (i === index ? roll : r).toJSON());
+    return rollMessage.update({
+      rolls,
+      flavor: this.#replaceAdvantageFlavor(rollMessage.flavor, mode),
+      [`flags.${this.options.id}.${RETRO_FLAG}`]: {
+        original: stored.original ?? current,
+        mode,
+        pool
+      }
+    });
+  }
+
+  /**
+   * Rolls one extra d20 for a message, showing it through Dice So Nice when present
+   * @param {ChatMessage} rollMessage
+   * @returns {Promise<number>}
+   */
+  async #rollExtraD20(rollMessage) {
+    const extra = await new Roll("1d20").evaluate();
+    try {
+      await game.dice3d?.showForRoll(extra, game.user, true, rollMessage.whisper, rollMessage.blind);
+    } catch (error) {
+      this.#log("CompactCards5e.#rollExtraD20 - dice3d", [error]);
+    }
+    return extra.total;
+  }
+
+  /**
+   * Replaces the "(Advantage)" or "(Disadvantage)" suffix the system puts on a roll message's
+   * flavor with the one for the new mode
+   * @param {string} flavor
+   * @param {number} mode
+   * @returns {string}
+   */
+  #replaceAdvantageFlavor(flavor, mode) {
+    const ADV_MODE = CONFIG.Dice.D20Roll.ADV_MODE;
+    const labels = [game.i18n.localize("DND5E.Advantage"), game.i18n.localize("DND5E.Disadvantage")];
+    let result = String(flavor ?? "");
+    for (const label of labels) result = result.replace(` (${label})`, "");
+    if (mode === ADV_MODE.ADVANTAGE) result += ` (${labels[0]})`;
+    else if (mode === ADV_MODE.DISADVANTAGE) result += ` (${labels[1]})`;
+    return result;
   }
 
   /**
@@ -494,7 +712,7 @@ export class CompactCards5e {
    * @param {HTMLElement} drawer
    */
   #wireDrawer(origin, rollMessage, row, drawer) {
-    const toggle = row.querySelector(".dcc-row-total button");
+    const toggle = row.querySelector(".dcc-row-total button:not(.dcc-advantage-button)");
     if (!toggle) return;
     if (toggle.classList.contains("dice-roll")) {
       toggle.popoverTargetElement = null;

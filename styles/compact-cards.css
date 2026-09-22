@@ -235,6 +235,64 @@ body.dnd5e-compact-cards {
     .dcc-roll-row > .dcc-row-main > button.dcc-select-targets {
       margin-inline-start: 2px;
     }
+
+    /* Buttons on an attack row that apply advantage (angles up, left of the total) or
+       disadvantage (angles down, right of it) after the roll. The total column of every row in
+       the card widens to make room, so the totals of the other rows stay centered on the same
+       axis as the flanked one */
+    .message-content:has(.dcc-with-advantage) {
+      --dcc-row-total-width: calc(52px + 2 * var(--dcc-advantage-width, 16px));
+    }
+    .dcc-row-total.dcc-with-advantage {
+      flex-direction: row;
+      align-items: center;
+      gap: 2px;
+
+      > button.dice-roll {
+        flex: 1 1 auto;
+        width: auto;
+        min-width: 0;
+      }
+    }
+    button.dcc-advantage-button {
+      flex: 0 0 var(--dcc-advantage-width, 16px);
+      width: var(--dcc-advantage-width, 16px);
+      height: 28px;
+      margin: 0;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      border-radius: 3px;
+      background: transparent;
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-14);
+      line-height: 1;
+      cursor: var(--cursor-pointer, pointer);
+
+      &:hover:not(:disabled),
+      &:focus,
+      &:focus-visible {
+        background: var(--color-highlights-50, var(--dcc-button-hover-bg));
+        color: var(--dcc-button-hover-text);
+        outline: none;
+        box-shadow: none;
+      }
+      &[aria-pressed="true"] {
+        color: var(--color-highlights, var(--dnd5e-color-gold));
+      }
+      &:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+    }
+    /* Advantage mode pill; a small history icon marks a mode changed after the roll */
+    .dcc-advantage-tag > i {
+      font-size: var(--font-size-10);
+      margin-inline-end: 3px;
+      opacity: 0.8;
+    }
     button.dcc-record-targets {
       flex: 0 0 auto;
       width: var(--button-size, 24px);

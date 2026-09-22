@@ -18,5 +18,11 @@
   "showFewerTags": "Show fewer tags",
   "handledBy": "Compact activity cards are handled by {module} on this client. Its settings apply and these ones are ignored.",
   "selectTargeted": "Select the tokens this roll targeted",
+  "retroAdvantage": "Apply advantage",
+  "retroDisadvantage": "Apply disadvantage",
+  "retroNormal": "Back to a normal roll",
+  "retroChanged": "Changed after the roll",
+  "retroFailed": "The roll could not be changed.",
+  "normalRoll": "Normal",
   "noRecordedTargets": "This roll recorded no targets on the current scene."
 }
