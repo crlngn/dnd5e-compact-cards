@@ -577,8 +577,9 @@ export class CompactCards5e {
 
   /**
    * Whether the current user may change this roll's advantage mode after the fact: the message
-   * must be theirs or they must be the GM, the d20 must be a plain single die without rerolls or
-   * explosions, and Ready Set Roll must not be providing the same controls.
+   * must be theirs or they must be the GM, the d20 must be a plain die (one die, or the two or
+   * three an advantage or disadvantage roll keeps one of) without rerolls or explosions, and
+   * Ready Set Roll must not be providing the same controls.
    * @param {ChatMessage} rollMessage
    * @param {Roll} roll - The message's d20 roll
    * @returns {boolean}
@@ -589,7 +590,7 @@ export class CompactCards5e {
     if (!rollMessage.canUserModify?.(game.user, "update")) return false;
     if (!roll?._evaluated || !roll.validD20Roll) return false;
     const die = roll.d20;
-    if (!die || die.number !== 1 || die.faces !== 20) return false;
+    if (!die || die.faces !== 20 || die.number < 1 || die.number > 3) return false;
     return die.results.every(r => !r.rerolled && !r.exploded);
   }
 
