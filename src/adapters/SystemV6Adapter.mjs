@@ -11,8 +11,8 @@ export class SystemV6Adapter {
   /** @type {boolean} The dnd5e "Summary Chat Cards" client setting exists and gates the feature */
   usesSummarySetting = true;
 
-  /** @type {boolean} The card face lists its recorded targets next to the target buttons, replacing the system's own row */
-  showsCardTargets = true;
+  /** @type {boolean} The card face carries only the target buttons: the attack row and the damage tray already list the targets */
+  showsCardTargets = false;
 
   /** @type {boolean} The tag row stays a row of its own, with the system's tag icon */
   tagsInTargetsRow = false;
