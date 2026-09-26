@@ -69,9 +69,12 @@ way the system does, recomputes the total and formula, and updates the message's
 rolls and flavor. Every d20 rolled for a message is kept under
 `flags.<host>.retroAdvantage.pool`, so switching modes back and forth reuses the
 same dice instead of rolling new ones, and the original mode is kept so a changed
-roll shows a marked pill. Rolls with rerolls or explosions on the d20 are left
-alone, as are all rolls when Ready Set Roll is active or the host's optional
-`retroAdvantage` setting is off. `instance.setAdvantageMode(
+roll shows a marked pill. A die Halfling Lucky rerolled away stays out of the
+pool, a fresh natural 1 is rerolled the same way while that reroll is unused, and
+the d20's minimum and maximum modifiers are re-applied to pooled dice so Reliable
+Talent still counts. Rolls with explosions on the d20 are left alone, as are all
+rolls when Ready Set Roll is active or the host's optional `retroAdvantage`
+setting is off. `instance.setAdvantageMode(
 rollMessage, mode, rollIndex?)` exposes the same operation for macros, with `mode`
 one of `CONFIG.Dice.D20Roll.ADV_MODE`.
 

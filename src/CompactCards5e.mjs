@@ -578,8 +578,9 @@ export class CompactCards5e {
   /**
    * Whether the current user may change this roll's advantage mode after the fact: the message
    * must be theirs or they must be the GM, the d20 must be a plain die (one die, or the two or
-   * three an advantage or disadvantage roll keeps one of) without rerolls or explosions, and
-   * Ready Set Roll must not be providing the same controls.
+   * three an advantage or disadvantage roll keeps one of) without explosions, and Ready Set Roll
+   * must not be providing the same controls. Rerolls are fine: a die Halfling Lucky rerolled
+   * away is set aside, and a Reliable Talent minimum only marks a result as rerolled.
    * @param {ChatMessage} rollMessage
    * @param {Roll} roll - The message's d20 roll
    * @returns {boolean}
@@ -591,7 +592,7 @@ export class CompactCards5e {
     if (!roll?._evaluated || !roll.validD20Roll) return false;
     const die = roll.d20;
     if (!die || die.faces !== 20 || die.number < 1 || die.number > 3) return false;
-    return die.results.every(r => !r.rerolled && !r.exploded);
+    return die.results.every(r => !r.exploded);
   }
 
   /**
@@ -645,8 +646,11 @@ export class CompactCards5e {
    * forth reuses the same dice instead of rolling new ones; a die is only rolled when the pool
    * is short, and shown through Dice So Nice when present. The kept die is the highest for
    * advantage (of three with Elven Accuracy), the lowest for disadvantage, and the first rolled
-   * for a normal roll. Hit or miss, critical and fumble follow from the new total when the card
-   * re-renders.
+   * for a normal roll. A die Halfling Lucky rerolled away stays in the results but out of the
+   * pool, a fresh natural 1 is rerolled the same way when that reroll is still unused, and the
+   * die's minimum and maximum modifiers are re-applied to every pooled die so Reliable Talent
+   * survives the change. Hit or miss, critical and fumble follow from the new total when the
+   * card re-renders.
    * @param {ChatMessage} rollMessage - An attack, check, save or other d20 roll message
    * @param {number} mode - One of `CONFIG.Dice.D20Roll.ADV_MODE`
    * @param {number} [rollIndex] - Index of the roll to change; defaults to the message's first d20 roll
@@ -662,19 +666,30 @@ export class CompactCards5e {
     const die = roll.d20;
     const flag = rollMessage.getFlag(this.options.id, RETRO_FLAG);
     const stored = flag && (flag.index ?? index) === index ? flag : {};
-    const rolled = die.results.map(r => r.result);
+    const setAside = die.results.filter(r => this.#isRerolledAway(r));
+    const rolled = die.results.filter(r => !this.#isRerolledAway(r)).map(r => r.result);
     const pool = [...rolled, ...(stored.pool ?? []).slice(rolled.length)];
     const elvenAccuracy = mode === ADV_MODE.ADVANTAGE && die.options.elvenAccuracy === true;
     const needed = mode === ADV_MODE.NORMAL ? 1 : (elvenAccuracy ? 3 : 2);
-    while (pool.length < needed) pool.push(await this.#rollExtraD20(rollMessage));
+    while (pool.length < needed) {
+      const result = await this.#rollExtraD20(rollMessage);
+      if (result === 1 && !setAside.length && die.modifiers.includes("r1=1")) {
+        setAside.push(this.#buildD20Result(die, result, { active: false, rerolled: true }));
+        continue;
+      }
+      pool.push(result);
+    }
 
     const values = pool.slice(0, needed);
     const kept = mode === ADV_MODE.NORMAL ? 0
       : values.indexOf(mode === ADV_MODE.ADVANTAGE ? Math.max(...values) : Math.min(...values));
     die.applyAdvantage(mode);
-    die.results = values.map((result, i) => (i === kept
-      ? { result, active: true }
-      : { result, active: false, discarded: true }));
+    die.results = [
+      ...setAside,
+      ...values.map((result, i) => this.#buildD20Result(die, result, i === kept
+        ? { active: true }
+        : { active: false, discarded: true }))
+    ];
     roll.options.advantageMode = mode;
     roll.options.advantage = mode === ADV_MODE.ADVANTAGE;
     roll.options.disadvantage = mode === ADV_MODE.DISADVANTAGE;
@@ -692,6 +707,45 @@ export class CompactCards5e {
         index
       }
     });
+  }
+
+  /**
+   * Whether a die result was rerolled away, as by Halfling Lucky: core marks it rerolled and
+   * inactive without discarding it, unlike a result a minimum or maximum only adjusted
+   * @param {DiceTermResult} result
+   * @returns {boolean}
+   */
+  #isRerolledAway(result) {
+    return result.rerolled === true && !result.active && !result.discarded;
+  }
+
+  /**
+   * Builds a d20 result entry from a pooled value, applying the die's `min` and `max` modifiers
+   * the way core does so a Reliable Talent minimum counts toward the total
+   * @param {DiceTerm} die
+   * @param {number} result - The rolled value
+   * @param {Partial<DiceTermResult>} state - The active, discarded and rerolled flags for the entry
+   * @returns {DiceTermResult}
+   */
+  #buildD20Result(die, result, state) {
+    const entry = { result, ...state };
+    const min = this.#rangeModifier(die, "min");
+    const max = this.#rangeModifier(die, "max");
+    if (min !== null && result < min) Object.assign(entry, { count: min, rerolled: true });
+    else if (max !== null && result > max) Object.assign(entry, { count: max, rerolled: true });
+    return entry;
+  }
+
+  /**
+   * Reads the value of a die's `min` or `max` modifier, if it has one
+   * @param {DiceTerm} die
+   * @param {"min"|"max"} kind
+   * @returns {number|null}
+   */
+  #rangeModifier(die, kind) {
+    const rgx = new RegExp(`^${kind}(\\d+)$`, "i");
+    const match = die.modifiers.map(m => m.match(rgx)).find(m => m);
+    return match ? parseInt(match[1]) : null;
   }
 
   /**
