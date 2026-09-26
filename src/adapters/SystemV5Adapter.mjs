@@ -266,7 +266,10 @@ export class SystemV5Adapter {
   /**
    * Renders the usage card's folded rolls as `.card-summary` entries after the card face, in the
    * order the system lists them, using the shared attack and damage templates and a row of the
-   * system's save summary shape for saves and checks
+   * system's save summary shape for saves and checks. The summaries are inserted after the system
+   * enriched the message, which is when it strips the `dnd5e2` class from nested elements, so the
+   * same is done here: under a dark interface theme a nested `dnd5e2` element would otherwise take
+   * the system's dark variables and paint the damage tray dark inside the light card
    * @param {ChatMessage} origin
    * @param {HTMLElement} content - The message content element
    */
@@ -285,6 +288,7 @@ export class SystemV5Adapter {
       const token = this.getSpeakerUuids(message).token;
       if (token) summary.dataset.targetUuid = token;
       summary.innerHTML = html;
+      summary.querySelectorAll(".dnd5e2").forEach(el => el.classList.remove("dnd5e2"));
       if (anchor) anchor.before(summary);
       else container.appendChild(summary);
       if (kind === "damage") this.#prepareDamageTray(message, summary);

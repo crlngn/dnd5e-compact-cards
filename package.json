@@ -1,6 +1,6 @@
 {
   "name": "@crlngn/dnd5e-compact-cards",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Compact activity cards for dnd5e 5.3+ and 6.0, shared between Carolingian UI and Flash Token Bar 5e",
   "license": "CC-BY-NC-4.0",
   "private": true,
