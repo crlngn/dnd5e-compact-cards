@@ -1,12 +1,37 @@
 # Carolingian UI DnD5e Compact Cards
 
-Compact activity cards for dnd5e 6.0, shared as a git submodule by
+Compact activity cards for dnd5e 5.3+ and 6.0, shared as a git submodule by
 [Carolingian UI](https://github.com/crlngn/crlngn-ui) and
-[Flash Token Bar 5e](https://github.com/crlngn/flash-rolls-5e). It builds on the
-system's own chat card summary mechanism: attack, damage and healing rolls whose
-`system.origin` points at a usage card are folded into that card as rows with a
-total column and a drawer, saves are grouped into one row per ability, and the
-tag row is unified and collapsed.
+[Flash Token Bar 5e](https://github.com/crlngn/flash-rolls-5e). Attack, damage and
+healing rolls are folded into the usage card that created them as rows with a total
+column and a drawer, saves are grouped into one row per ability, and the tag row is
+unified and collapsed.
+
+## System generations
+
+A system adapter (`src/adapters/`) hides the differences between dnd5e generations;
+the rest of the code only talks to it.
+
+- **dnd5e 6.0+** builds on the system's own chat card summaries: roll messages whose
+  `system.origin` points at a usage card are rendered by the system as
+  `.card-summary` entries, and the package redirects the attack and damage summary
+  templates to its own. The system hides the folded messages and refreshes the card.
+- **dnd5e 5.3+** links rolls to their card through `flags.dnd5e.originatingMessage`
+  and `dnd5e.registry.messages`, but renders nothing from that link. The adapter
+  builds the `.card-summary` entries itself from the same templates (attack and
+  damage) and from a save-summary shaped row (saves and checks), hides the folded
+  roll messages in the log, and re-renders the card when a roll is created, updated
+  or deleted. Targets are read and written as `flags.dnd5e.targets`. There is no
+  "Summary Chat Cards" setting to keep in sync on 5.x.
+
+The templates carry both variants: a `legacy` context flag and per-target `plain`
+flags switch the 5.x markup on, since 5.x has no `target-pill` element or damage
+breakdown partial. The retroactive advantage code is the same on both generations,
+as the D20 die model is identical.
+
+Support is declined when midi-qol is active on either generation: midi keeps its
+rolls inside its own card and rewrites that card's rolls from memory, so folding
+or changing them would desync its workflow.
 
 The package is source only. Each host bundles `src/` with Vite, imports the
 stylesheet, and copies the two templates into its own `templates/` folder.
@@ -91,7 +116,9 @@ Hosts may pass alias hook names that are fired alongside these.
 
 The stylesheet is gated by `body.dnd5e-compact-cards` (compact cards) and
 `body.dnd5e-icon-card-buttons` (icon-only card buttons), which the active copy
-toggles. Colors use the host's `--cui-chat-*` tokens when defined and fall back to
+toggles. Rules specific to the 5.x card markup match `body.crlngn-dnd5e-v5`, the
+class Carolingian UI adds for the system's major version, or the 5.x card markup
+itself. Colors use the host's `--cui-chat-*` tokens when defined and fall back to
 values derived from the card's text color. All classes are prefixed `dcc-`.
 
 ## Releasing

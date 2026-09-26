@@ -6,8 +6,10 @@ Carolingian UI) and fall back to theme-neutral values derived from the card's te
 ******************/
 /* Tokens are declared on the message itself, not on body: hosts scope their theme tokens to
    `#interface.theme-*` and `.chat-popout`, and a custom property's fallback resolves where the
-   property is declared, so declaring these on body would only ever see the light defaults */
-:is(body.dnd5e-compact-cards, body.dnd5e-icon-card-buttons) :is(.chat-popout, #chat-log, .chat-log, #chat-notifications) .chat-message {
+   property is declared, so declaring these on body would only ever see the light defaults. They
+   are not gated on the body classes because the advantage controls also sit on plain roll cards
+   while compact cards are off */
+:is(.chat-popout, #chat-log, .chat-log, #chat-notifications) .chat-message {
   --dcc-row-total-width: 52px;
   --dcc-border-radius: var(--crlngn-border-radius, 4px);
   --dcc-button-min-height: var(--cui-chat-button-min-height, 2.5em);
@@ -24,7 +26,7 @@ Carolingian UI) and fall back to theme-neutral values derived from the card's te
 
 body.dnd5e-compact-cards {
 
-  :is(.chat-popout, #chat-log, .chat-log, #chat-notifications) .chat-message.compact {
+  :is(.chat-popout, #chat-log, .chat-log, #chat-notifications) .chat-message:is(.compact, .dcc-legacy) {
 
     /* Summaries that use the module's row templates get a solid divider instead of the system's dashed one */
     .card-summary:has(> .dcc-roll-row),
@@ -271,45 +273,6 @@ body.dnd5e-compact-cards {
     .dcc-save-list .save-summary.dcc-with-advantage > button.dice-roll {
       min-width: calc(var(--dcc-row-total-width) - 2 * var(--dcc-advantage-width, 16px) - 4px);
     }
-    button.dcc-advantage-button {
-      flex: 0 0 var(--dcc-advantage-width, 16px);
-      width: var(--dcc-advantage-width, 16px);
-      height: 28px;
-      margin: 0;
-      padding: 0;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border: 0;
-      border-radius: 3px;
-      background: transparent;
-      color: var(--color-text-secondary);
-      font-size: var(--font-size-14);
-      line-height: 1;
-      cursor: var(--cursor-pointer, pointer);
-
-      &:hover:not(:disabled),
-      &:focus,
-      &:focus-visible {
-        background: var(--color-highlights-50, var(--dcc-button-hover-bg));
-        color: var(--dcc-button-hover-text);
-        outline: none;
-        box-shadow: none;
-      }
-      &[aria-pressed="true"] {
-        color: var(--color-highlights, var(--dnd5e-color-gold));
-      }
-      &:disabled {
-        opacity: 0.5;
-        cursor: default;
-      }
-    }
-    /* Advantage mode pill; a small history icon marks a mode changed after the roll */
-    .dcc-advantage-tag > i {
-      font-size: var(--font-size-10);
-      margin-inline-end: 3px;
-      opacity: 0.8;
-    }
     button.dcc-record-targets {
       flex: 0 0 auto;
       width: var(--button-size, 24px);
@@ -517,7 +480,7 @@ body.dnd5e-compact-cards {
     }
 
     /* Unified tag row: collapsed to the first three tags behind a +N chip */
-    .icon-row > ul.pills.dcc-tags {
+    ul.pills.dcc-tags {
       justify-content: flex-start;
       margin-inline-start: 0;
 
@@ -547,7 +510,7 @@ body.dnd5e-compact-cards {
 }
 
 /* Icon-only card buttons */
-body.dnd5e-icon-card-buttons :is(.chat-popout, #chat-log, .chat-log, #chat-notifications) .chat-message.compact .icon-row > ul.unlist:not(.pills) {
+body.dnd5e-icon-card-buttons :is(.chat-popout, #chat-log, .chat-log, #chat-notifications) .chat-message:is(.compact, .dcc-legacy) .icon-row > ul.unlist:not(.pills) {
   > li {
     flex: 0 0 auto;
     min-width: 0;
@@ -560,6 +523,202 @@ body.dnd5e-icon-card-buttons :is(.chat-popout, #chat-log, .chat-log, #chat-notif
 
     &:is([data-action], [data-forward-action])::after {
       content: none;
+    }
+  }
+}
+
+/* dnd5e 5.x: the system has no summary styles of its own there, and the card face uses the
+   older activity card markup (card-buttons, card-footer, dice-total headings). The active copy
+   marks every message it renders on 5.x with `dcc-legacy` */
+body.dnd5e-compact-cards :is(.chat-popout, #chat-log, .chat-log, #chat-notifications) .chat-message.dcc-legacy {
+
+  .card-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  /* Plain target pills stand in for the 6.0 target-pill element */
+  .dcc-target-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+
+    > i {
+      font-size: var(--font-size-10);
+    }
+    &.hit > i {
+      color: var(--color-level-success);
+    }
+    &.miss > i {
+      color: var(--color-level-error);
+    }
+    .dcc-target-ac {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      font-size: var(--font-size-10);
+      color: var(--dcc-pill-text);
+    }
+  }
+
+  /* The delete control of a folded roll shows on hover */
+  .card-summary .dcc-delete {
+    height: 16px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+  .card-summary:hover .dcc-delete,
+  .card-summary:focus-within .dcc-delete {
+    opacity: 1;
+  }
+
+  /* The card footer becomes the unified tag row, moved above the buttons */
+  .chat-card > ul.card-footer.dcc-tags {
+    margin-block: 4px;
+    justify-content: flex-start;
+  }
+  ul.card-footer.dcc-tags > li.pill,
+  .dcc-row-pills > li.pill,
+  .dcc-row-targets .pill {
+    font-size: var(--font-size-10);
+  }
+
+  /* The targets rows have no icon-row styles from the system on 5.x: icon column, then the pills */
+  .dcc-row-targets {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    > i {
+      flex: 0 0 var(--button-size, 24px);
+      width: var(--button-size, 24px);
+      text-align: center;
+      color: var(--dnd5e-color-gold);
+      font-size: var(--font-size-12);
+    }
+    > ul {
+      display: flex;
+      flex: 1 1 auto;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin: 0;
+      min-width: 0;
+    }
+  }
+
+  /* The targets row added to the card face has no system styles on 5.x. The system sizes and
+     colors buttons inside its cards, so the target buttons restate their size and text color */
+  .chat-card > .dcc-card-targets {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-block: 4px;
+
+    > i {
+      flex: 0 0 var(--button-size, 24px);
+      text-align: center;
+      color: var(--dnd5e-color-gold);
+    }
+    button.dcc-record-targets {
+      width: var(--button-size, 24px);
+      height: var(--button-size, 24px);
+      line-height: 1;
+    }
+    > ul.card-footer.dcc-tags {
+      flex: 1 1 auto;
+      flex-wrap: wrap;
+      margin: 0;
+      min-width: 0;
+    }
+  }
+
+  /* The system colors the icons of buttons inside its cards; the target buttons keep the primary text color */
+  button.dcc-record-targets {
+    color: var(--color-text-primary);
+
+    > i {
+      color: inherit;
+    }
+  }
+
+}
+
+/* Retroactive advantage controls. Not gated on the compact cards body class: roll messages shown
+   as their own card carry them whether or not compact cards are on */
+:is(.chat-popout, #chat-log, .chat-log, #chat-notifications) .chat-message {
+  button.dcc-advantage-button {
+    flex: 0 0 var(--dcc-advantage-width, 16px);
+    width: var(--dcc-advantage-width, 16px);
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-14);
+    line-height: 1;
+    cursor: var(--cursor-pointer, pointer);
+
+    &:hover:not(:disabled),
+    &:focus,
+    &:focus-visible {
+      background: var(--color-highlights-50, var(--dcc-button-hover-bg));
+      color: var(--dcc-button-hover-text);
+      outline: none;
+      box-shadow: none;
+    }
+    &[aria-pressed="true"] {
+      color: var(--color-highlights, var(--dnd5e-color-gold));
+    }
+    &:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+  }
+  /* Advantage mode pill; a small history icon marks a mode changed after the roll */
+  .dcc-advantage-tag > i {
+    font-size: var(--font-size-10);
+    margin-inline-end: 3px;
+    opacity: 0.8;
+  }
+  /* dnd5e 5.x roll cards show the total as a big heading; the buttons sit inside it, flanking
+     the value, and grow to its height. The system's result icons and expand chevron are
+     absolutely positioned in the heading, so the end padding keeps the chevron clear */
+  &.dcc-legacy .dice-total.dcc-with-advantage {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    gap: 6px;
+
+    > .dcc-total-value {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+    }
+    > button.dcc-advantage-button {
+      height: auto;
+      flex-basis: 28px;
+      width: 28px;
+      font-size: var(--font-size-18);
+      color: var(--color-text-primary);
+      opacity: 0.5;
+
+      > i {
+        color: inherit;
+      }
+      &:hover:not(:disabled),
+      &:focus-visible,
+      &[aria-pressed="true"] {
+        opacity: 1;
+      }
+      &[aria-pressed="true"] {
+        color: var(--color-highlights, var(--dnd5e-color-gold));
+      }
     }
   }
 }

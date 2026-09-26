@@ -1,7 +1,13 @@
 import { COMPACT_CARDS_HOOKS } from "./hooks.mjs";
+import { createSystemAdapter, MIN_SYSTEM_VERSION, SystemV6Adapter } from "./adapters/index.mjs";
+import { systemLabel } from "./i18n.mjs";
+import { FOLDED_KINDS } from "./rollKinds.mjs";
 
 /** Number of tags shown before the row collapses behind a "+N" chip */
 const VISIBLE_TAGS = 3;
+
+/** Kinds of roll of which only the newest is shown on a card, since a new one replaces the last */
+const LATEST_ONLY_KINDS = new Set(["attack", "damage"]);
 
 /**
  * Display priority of usage card tags by dnd5e property type, per item kind. Lower sorts first.
@@ -54,6 +60,9 @@ export const COMPACT_CARDS_BODY_CLASS = "dnd5e-compact-cards";
 /** Body class set while card buttons are icon-only */
 export const ICON_BUTTONS_BODY_CLASS = "dnd5e-icon-card-buttons";
 
+/** Class set on chat messages rendered on dnd5e 5.x, whose messages lack the 6.0 `compact` class the styles key on */
+export const LEGACY_MESSAGE_CLASS = "dcc-legacy";
+
 /** Key of the dnd5e "Summary Chat Cards" client setting compact cards build on, kept in sync with the host's setting */
 export const DND5E_SUMMARY_SETTING = "chatCardSummary";
 
@@ -84,9 +93,11 @@ const READY_SET_ROLL_ID = "ready-set-roll-5e";
  */
 
 /**
- * Compact activity cards for dnd5e 6.0: folds attack, damage and healing rolls into the activity
+ * Compact activity cards for dnd5e: folds attack, damage and healing rolls into the activity
  * card that created them, groups save rolls into one row, unifies and collapses the tag row,
- * and toggles labeled or icon-only card buttons.
+ * and toggles labeled or icon-only card buttons. On dnd5e 6.0 this builds on the system's own
+ * card summaries; on dnd5e 5.x the summaries are built here. A system adapter hides the
+ * difference.
  *
  * One instance is created per host module. Only the instance the shared registry picks at
  * `setup` is activated; the others stay inert and expose the id of the module handling the
@@ -103,10 +114,12 @@ export class CompactCards5e {
   isSupported = false;
   /** @type {string} Why support was declined, for diagnostics */
   unsupportedReason = "";
-  /** @type {Record<string, string>} Summary templates keyed by the ChatMessage document type */
+  /** @type {Record<string, string>} Summary templates keyed by roll kind */
   #summaryTemplates;
-  /** @type {boolean} Whether summary template getters have been installed */
-  #patched = false;
+  /** @type {import("./adapters/index.mjs").SystemAdapter|null} Bridge to the running dnd5e generation, set once support is checked */
+  adapter = null;
+  /** @type {Promise<void>|null} Resolves once the summary templates are compiled */
+  templatesReady = null;
   /** @type {Map<string, boolean>} Open state of roll drawers, keyed by `${originId}:${rollMessageId}` */
   #drawerStates = new Map();
   /** @type {Map<string, boolean>} Expanded state of tag rows, keyed by origin message id */
@@ -137,16 +150,20 @@ export class CompactCards5e {
   }
 
   /**
+   * Paths of the attack and damage summary templates, keyed by roll kind
+   * @returns {Record<string, string>}
+   */
+  get summaryTemplates() {
+    return this.#summaryTemplates;
+  }
+
+  /**
    * Whether compact cards are currently in effect for this client through this copy
    * @returns {boolean}
    */
   get isActive() {
     if (!this.activated || !this.isSupported || !this.#setting("compactCards")) return false;
-    try {
-      return game.settings.get("dnd5e", "chatCardSummary") !== false;
-    } catch (error) {
-      return false;
-    }
+    return this.adapter?.summarySettingEnabled() ?? false;
   }
 
   /**
@@ -163,8 +180,8 @@ export class CompactCards5e {
     if (!this.isSupported) return;
     this.applyLabeledButtons();
 
-    foundry.applications.handlebars.loadTemplates(Object.values(this.#summaryTemplates));
-    this.#patchSummaryTemplates();
+    this.templatesReady = foundry.applications.handlebars.loadTemplates(Object.values(this.#summaryTemplates));
+    this.adapter.install();
     Hooks.on("dnd5e.renderChatMessage", this.#onRenderChatMessage);
     Hooks.on("clientSettingChanged", this.#onClientSettingChanged);
     Hooks.on("updateSetting", this.#onUpdateSetting);
@@ -254,6 +271,7 @@ export class CompactCards5e {
    * @returns {boolean|null}
    */
   #getSummarySetting() {
+    if (!this.adapter?.usesSummarySetting) return null;
     try {
       return game.settings.get("dnd5e", DND5E_SUMMARY_SETTING) !== false;
     } catch (error) {
@@ -288,8 +306,8 @@ export class CompactCards5e {
    */
   #onUpdateChatMessage = (message, changed) => {
     if (!this.isActive || !("rolls" in (changed ?? {}))) return;
-    const origin = message.system?.origin;
-    if (!origin?.system?.rendersSummaries) return;
+    const origin = this.adapter.getOrigin(message);
+    if (!origin) return;
     for (const log of [ui.chat, ui.chat?.popout]) log?.updateMessage?.(origin);
   };
 
@@ -331,7 +349,7 @@ export class CompactCards5e {
 
   /**
    * Applies the labeled buttons setting through a body class. Like the rest of the feature this
-   * only acts on dnd5e 6.0+, where the cards it styles exist.
+   * only acts on supported dnd5e versions, where the cards it styles exist.
    * @param {boolean} [value] - New setting value, when called from a setting change
    */
   applyLabeledButtons(value) {
@@ -361,7 +379,10 @@ export class CompactCards5e {
   }
 
   /**
-   * Checks whether dnd5e 6.0's card summary mechanism is available and no conflicting module is active
+   * Picks the adapter for the running dnd5e version, checks that the system pieces it relies on
+   * exist, and declines when a conflicting module is active. midi-qol keeps its rolls inside its
+   * own card and rewrites that card's rolls from memory, so nothing here can safely fold or
+   * change them.
    * @returns {boolean}
    */
   #checkSupport() {
@@ -370,54 +391,40 @@ export class CompactCards5e {
       return false;
     };
     if (game.system?.id !== "dnd5e") return fail("system");
-    if (foundry.utils.isNewerVersion("6.0.0", game.system.version)) return fail(`dnd5e ${game.system.version} < 6.0.0`);
-    const models = CONFIG.ChatMessage?.dataModels ?? {};
-    if (!models.usage?.prototype || !models.attack?.prototype || !models.damage?.prototype) return fail("message data models missing");
-    if (!("rendersSummaries" in models.usage.prototype)) return fail("no card summary support");
+    const adapter = createSystemAdapter(this);
+    if (!adapter) return fail(`dnd5e ${game.system.version} < ${MIN_SYSTEM_VERSION}`);
+    const reason = adapter.checkSupport();
+    if (reason) return fail(reason);
     if (game.modules.get("midi-qol")?.active) return fail("midi-qol active");
+    this.adapter = adapter;
     this.unsupportedReason = "";
     return true;
   }
 
   /**
-   * Installs summaryTemplate getters on the attack and damage message data models.
-   * The getters return the shared templates while compact cards are active and fall back to the
-   * system's own value otherwise, so the setting can be toggled without a reload.
-   */
-  #patchSummaryTemplates() {
-    if (this.#patched) return;
-    const models = CONFIG.ChatMessage.dataModels;
-    const instance = this;
-    for (const [type, template] of Object.entries(this.#summaryTemplates)) {
-      const proto = models[type]?.prototype;
-      if (!proto) continue;
-      const original = Object.getOwnPropertyDescriptor(proto, "summaryTemplate");
-      Object.defineProperty(proto, "summaryTemplate", {
-        configurable: true,
-        get() {
-          if (instance.isActive) return template;
-          if (original?.get) return original.get.call(this);
-          return this.metadata?.summaryTemplate ?? "";
-        }
-      });
-    }
-    this.#patched = true;
-  }
-
-  /**
-   * Enriches usage cards after dnd5e has rendered them and their summaries
+   * Enriches usage cards after dnd5e has rendered them and their summaries. Roll messages shown
+   * as their own card get the advantage controls whether or not compact cards are on, so a roll
+   * can still be changed when nothing is folded.
    * @param {ChatMessage} message
    * @param {HTMLElement} html - The chat message element
    */
   #onRenderChatMessage = (message, html) => {
-    if (!this.isActive) return;
+    if (!this.activated || !this.isSupported) return;
     const content = html?.querySelector?.(".message-content");
     if (!content) return;
-    if (message.type !== "usage") {
+    html.classList.toggle(LEGACY_MESSAGE_CLASS, this.adapter.generation === "v5");
+    if (!this.adapter.isUsageMessage(message)) {
+      if (this.isActive) {
+        this.adapter.onRenderRollMessage(message, html);
+        this.#foldNotification(message, html);
+      }
       this.#enrichStandaloneRoll(message, content);
       return;
     }
+    if (!this.isActive) return;
     try {
+      this.adapter.renderSummaries(message, content);
+      this.#dropSupersededSummaries(content);
       this.#enrichSummaries(message, content);
       this.#groupSaves(message, content);
       this.#buildTagRow(message, content);
@@ -429,6 +436,34 @@ export class CompactCards5e {
   };
 
   /**
+   * Keeps a folded roll out of the chat notifications while the card it belongs to is showing
+   * there, so that area shows the compact card instead of a separate roll card. The roll's element
+   * is hidden in the log, but the notifications area reveals its own copy once it is posted; when
+   * that happens and the card's notification is still up, the roll's copy is hidden again and the
+   * card's notification is kept alive, having been refreshed with the new row. When the card's
+   * notification is already gone the roll's copy stays, so the roll is still announced.
+   * @param {ChatMessage} message
+   * @param {HTMLElement} html - The chat message element
+   */
+  #foldNotification(message, html) {
+    if (!FOLDED_KINDS.has(this.adapter.getRollKind(message))) return;
+    const origin = this.adapter.getOrigin(message);
+    if (!origin) return;
+    const observer = new MutationObserver(() => {
+      if (html.hidden) return;
+      const area = html.closest("#chat-notifications");
+      const card = area?.querySelector(`.message[data-message-id="${origin.id}"]`);
+      if (area && card) {
+        html.hidden = true;
+        card._lifeSpan = 0;
+      }
+      observer.disconnect();
+    });
+    observer.observe(html, { attributes: true, attributeFilter: ["hidden"] });
+    setTimeout(() => observer.disconnect(), 2000);
+  }
+
+  /**
    * Fires a shared hook and, when the host defined one, its alias
    * @param {"renderRoll"|"renderCard"} key
    * @param {string} hookName
@@ -438,6 +473,22 @@ export class CompactCards5e {
     Hooks.callAll(hookName, ...args);
     const alias = this.options.hooks?.[key];
     if (alias && alias !== hookName) Hooks.callAll(alias, ...args);
+  }
+
+  /**
+   * Removes the summaries of attack and damage rolls that a later roll of the same kind replaced,
+   * so rolling again swaps the row instead of adding one. The messages themselves are kept; the
+   * summaries come in timestamp order, so the last of a kind is the newest.
+   * @param {HTMLElement} content
+   */
+  #dropSupersededSummaries(content) {
+    const latest = new Map();
+    for (const summary of content.querySelectorAll(".card-summary[data-message-id]")) {
+      const kind = this.adapter.getRollKind(game.messages.get(summary.dataset.messageId));
+      if (!LATEST_ONLY_KINDS.has(kind)) continue;
+      latest.get(kind)?.remove();
+      latest.set(kind, summary);
+    }
   }
 
   /**
@@ -464,38 +515,36 @@ export class CompactCards5e {
     }
     for (const summary of summaries) {
       const rollMessage = game.messages.get(summary.dataset.messageId);
-      if (rollMessage?.type === "check") this.#enrichSystemRollRows(rollMessage, summary);
+      if (this.adapter.getRollKind(rollMessage) === "check") this.#enrichSystemRollRows(rollMessage, summary);
     }
   }
 
   /**
    * Adds the advantage pill and buttons to the roll rows of a message the system rendered with its
-   * own templates: a check summary inside a usage card, or a standalone check or save card. Each
-   * roll row is an icon row holding the roll's total button; the pill goes on the first pill list
-   * of the element, which names the target on summaries.
+   * own templates: a check summary inside a usage card, or a standalone check or save card. The
+   * adapter locates each roll's total and the pill list, if any, the mode pill goes on.
    * @param {ChatMessage} rollMessage
    * @param {HTMLElement} element - The summary or message content element
    */
   #enrichSystemRollRows(rollMessage, element) {
     if (!rollMessage.isContentVisible) return;
-    const buttons = Array.from(element.querySelectorAll(".icon-row > button.dice-roll"));
-    const pills = element.querySelector(".icon-row > ul.pills");
-    for (const [index, button] of buttons.entries()) {
+    for (const [index, { button, pills }] of this.adapter.getRollTotals(element).entries()) {
       if (button.closest(".dcc-roll-row, .dcc-save-list")) continue;
-      this.#addAdvantage(rollMessage, index, button, index === 0 ? pills : null);
+      this.#addAdvantage(rollMessage, index, button, pills);
     }
   }
 
   /**
-   * Adds the advantage buttons to a check or save message rendered as its own card, i.e. one not
-   * folded into a usage card. Death saves are left alone.
+   * Adds the advantage buttons to an attack, check or save message rendered as its own card,
+   * i.e. one not folded into a usage card because compact cards are off or it has no card.
+   * Death saves are left alone.
    * @param {ChatMessage} message
    * @param {HTMLElement} content
    */
   #enrichStandaloneRoll(message, content) {
-    if (message.type !== "check" && message.type !== "save") return;
-    if (message.system?.type === "death") return;
-    if (message.system?.origin?.system?.rendersSummaries) return;
+    const kind = this.adapter.getRollKind(message);
+    if (kind !== "attack" && kind !== "check" && kind !== "save") return;
+    if (this.isActive && this.adapter.getOrigin(message)) return;
     try {
       this.#enrichSystemRollRows(message, content);
     } catch (error) {
@@ -788,7 +837,7 @@ export class CompactCards5e {
    * @param {HTMLElement|null} title
    */
   #fillDamageRow(rollMessage, row, drawer, title) {
-    if (rollMessage.system?.isHealing) {
+    if (this.adapter.isHealing(rollMessage)) {
       const label = title?.querySelector(".dcc-row-label");
       if (label) label.textContent = game.i18n.localize("DND5E.Healing");
       const icon = row.querySelector(".dcc-row-icon");
@@ -863,7 +912,7 @@ export class CompactCards5e {
     const entries = [];
     for (const summary of content.querySelectorAll(".card-summary[data-message-id]")) {
       const message = game.messages.get(summary.dataset.messageId);
-      if (message?.type !== "save" || message.system?.type === "death") continue;
+      if (this.adapter.getRollKind(message) !== "save") continue;
       entries.push({ summary, message });
     }
     if (!entries.length && !isSaveActivity) return;
@@ -873,14 +922,15 @@ export class CompactCards5e {
       groups.set(activity.save?.ability?.first?.() ?? "", entries);
     } else {
       for (const entry of entries) {
-        const ability = entry.message.system?.ability ?? "";
+        const ability = this.adapter.getSaveAbility(entry.message);
         if (!groups.has(ability)) groups.set(ability, []);
         groups.get(ability).push(entry);
       }
     }
 
     const displayChallenge = origin.shouldDisplayChallenge ?? game.user.isGM;
-    const insertBefore = entries[0]?.summary ?? content.querySelector(":scope > effect-application");
+    const container = this.adapter.getSummaryContainer(content);
+    const insertBefore = entries[0]?.summary ?? container.querySelector(":scope > effect-application");
     for (const [ability, groupEntries] of groups) {
       const abilityLabel = CONFIG.DND5E.abilities?.[ability]?.label ?? "";
       const dc = groupEntries.map(e => e.message.rolls[0]?.options?.target).find(t => Number.isNumeric(t))
@@ -924,7 +974,7 @@ export class CompactCards5e {
       wrapper.className = "dcc-save-group";
       wrapper.append(row, list);
       if (insertBefore) insertBefore.before(wrapper);
-      else content.appendChild(wrapper);
+      else container.appendChild(wrapper);
       this.#wireSaveToggle(origin, ability, row, wrapper);
 
       if (isSaveActivity) {
@@ -982,10 +1032,11 @@ export class CompactCards5e {
 
   /**
    * Adds a targets row to the card face for the GM and the card's author: the buttons that record
-   * the user's targeted or selected tokens on the card, followed by the recorded targets. It sits
-   * between the tag row and the action buttons and replaces the system's own targets row, so it is
-   * available on every activity card, not only on saves. Save activities list their targets in
-   * the save section instead, so their row carries only the buttons.
+   * the user's targeted or selected tokens on the card, followed by the recorded targets when the
+   * adapter shows them there, or by the card's tags when the adapter puts those on this row. It
+   * sits between the tag row and the action buttons and replaces the system's own targets row, so
+   * it is available on every activity card, not only on saves. Save activities list their targets
+   * in the save section instead, so their row carries only the buttons.
    * @param {ChatMessage} origin
    * @param {HTMLElement} content
    */
@@ -998,7 +1049,7 @@ export class CompactCards5e {
 
     const row = document.createElement("section");
     row.className = "icon-row dcc-card-targets";
-    row.innerHTML = `<i class="fa-fw fa-solid fa-bullseye" aria-label="${game.i18n.localize("DND5E.CHATMESSAGE.Row.Targets")}"></i>`;
+    row.innerHTML = `<i class="fa-fw fa-solid fa-bullseye" aria-label="${systemLabel("DND5E.CHATMESSAGE.Row.Targets", "DND5E.TargetPl", "DND5E.Targets")}"></i>`;
     const controls = document.createElement("span");
     controls.className = "dcc-target-controls";
     controls.append(
@@ -1007,8 +1058,8 @@ export class CompactCards5e {
     );
     row.appendChild(controls);
 
-    if (!isSaveActivity) {
-      const targets = origin.system?.targets ?? [];
+    if (!isSaveActivity && this.adapter.showsCardTargets) {
+      const targets = this.adapter.getTargets(origin);
       const pills = document.createElement("ul");
       pills.className = "pills unlist targets dcc-card-target-pills";
       for (const target of targets) {
@@ -1016,21 +1067,26 @@ export class CompactCards5e {
         li.className = "pill target transparent";
         li.textContent = target.name ?? "";
         if (target.token) li.dataset.tokenUuid = target.token;
+        if (target.actor) li.dataset.actorUuid = target.actor;
         pills.appendChild(li);
       }
       if (!targets.length) {
         const li = document.createElement("li");
         li.className = "none pill target transparent";
-        li.textContent = game.i18n.localize("DND5E.Tokens.NoTargets");
+        li.textContent = systemLabel("DND5E.Tokens.NoTargets", "DND5E.None");
         pills.appendChild(li);
       }
       row.appendChild(pills);
     }
 
+    if (this.adapter.tagsInTargetsRow) {
+      const tags = this.adapter.getTagRow(face);
+      if (tags) row.appendChild(tags.list);
+    }
+
     const recorded = face.querySelector(":scope > recorded-targets");
     recorded?.classList.add("dcc-merged-targets");
-    const rows = Array.from(face.querySelectorAll(":scope > .icon-row"));
-    const buttonsRow = rows.find(r => r.querySelector(":scope > ul.unlist:not(.pills)"));
+    const buttonsRow = this.adapter.getButtonsRow(face);
     if (recorded) recorded.before(row);
     else if (buttonsRow) buttonsRow.before(row);
     else face.appendChild(row);
@@ -1050,23 +1106,23 @@ export class CompactCards5e {
     button.className = `unbutton dcc-record-targets ${mode}`;
     button.setAttribute("aria-label", this.#localize(isTargeted ? "addTargeted" : "addSelected"));
     button.setAttribute("data-tooltip", "");
-    button.innerHTML = `<i class="fa-solid ${isTargeted ? "fa-bullseye" : "fa-expand"}" inert></i>`;
+    button.innerHTML = `<i class="fa-solid ${isTargeted ? "fa-crosshairs" : "fa-expand"}" inert></i>`;
     button.addEventListener("click", async (event) => {
       event.preventDefault();
       event.stopPropagation();
       const tokens = isTargeted ? Array.from(game.user.targets ?? []) : (canvas.tokens?.controlled ?? []);
-      const added = CompactCards5e.getTargetDescriptors(tokens);
+      const added = this.adapter.getTargetDescriptors(tokens);
       if (!added.length) {
         ui.notifications?.warn(this.#localize(isTargeted ? "noTargeted" : "noSelected"));
         return;
       }
-      const existing = (origin.system?.targets ?? []).map(t => foundry.utils.deepClone(t));
+      const existing = this.adapter.getTargets(origin).map(t => foundry.utils.deepClone(t));
       const known = new Set(existing.map(t => t.token ?? t.actor));
       const merged = existing.concat(added.filter(t => !known.has(t.token ?? t.actor)));
       if (merged.length === existing.length) return;
       button.disabled = true;
       try {
-        await origin.update({ "system.targets": merged });
+        await this.adapter.setTargets(origin, merged);
       } catch (error) {
         this.#warn("CompactCards5e.#createRecordTargetsButton", [error]);
         button.disabled = false;
@@ -1091,8 +1147,8 @@ export class CompactCards5e {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const tokens = (rollMessage.system?.targets ?? [])
-        .map(descriptor => CompactCards5e.resolveTargetToken(descriptor))
+      const tokens = this.adapter.getTargets(rollMessage)
+        .map(descriptor => this.adapter.resolveTargetToken(descriptor))
         .filter(token => token?.control);
       if (!tokens.length) {
         ui.notifications?.warn(this.#localize("noRecordedTargets"));
@@ -1104,44 +1160,23 @@ export class CompactCards5e {
   }
 
   /**
-   * Resolves a recorded target descriptor to a token on the viewed scene, if any
+   * Resolves a dnd5e 6.0 target descriptor to a token on the viewed scene, if any. Kept for
+   * callers of earlier versions; the instance's adapter handles both generations.
    * @param {object} descriptor
    * @returns {Token|null}
    */
   static resolveTargetToken(descriptor) {
-    const TargetsField = dnd5e.dataModels?.chatMessage?.fields?.TargetsField;
-    const resolved = TargetsField?.resolve?.(descriptor);
-    if (resolved?.token) return resolved.token;
-    const actorId = foundry.utils.parseUuid(descriptor?.actor ?? "")?.id;
-    if (!actorId) return null;
-    return canvas.tokens?.placeables.find(t => t.document.actor?.id === actorId || t.document.baseActor?.id === actorId) ?? null;
+    return new SystemV6Adapter(null).resolveTargetToken(descriptor);
   }
 
   /**
-   * Builds target descriptors for tokens the way the system does, using its field when available
+   * Builds dnd5e 6.0 target descriptors for tokens. Kept for callers of earlier versions; the
+   * instance's adapter handles both generations.
    * @param {Token[]} tokens
    * @returns {object[]}
    */
   static getTargetDescriptors(tokens) {
-    const TargetsField = dnd5e.dataModels?.chatMessage?.fields?.TargetsField;
-    if (typeof TargetsField?.getDescriptors === "function") {
-      return TargetsField.getDescriptors(tokens);
-    }
-    const targets = new Map();
-    for (const target of tokens) {
-      const token = target.document ?? target;
-      const actor = token.actor;
-      if (!actor) continue;
-      const ac = actor.statuses?.has("coverTotal") ? null : actor.system?.attributes?.ac?.value;
-      targets.set(token.uuid, {
-        actor: actor.uuid,
-        ac: ac ?? null,
-        img: token.texture?.src,
-        name: token.name,
-        token: token.uuid
-      });
-    }
-    return Array.from(targets.values());
+    return new SystemV6Adapter(null).getTargetDescriptors(tokens);
   }
 
   /**
@@ -1153,12 +1188,11 @@ export class CompactCards5e {
    */
   #fillSaveTargets(origin, entries, list) {
     const remaining = new Set(entries);
-    const targets = origin.system?.targets ?? [];
+    const targets = this.adapter.getTargets(origin);
     for (const target of targets) {
       const matches = entries.filter(entry => {
         if (!remaining.has(entry)) return false;
-        const token = entry.message.getAssociatedToken?.()?.uuid;
-        const actor = entry.message.getAssociatedActor?.()?.uuid;
+        const { token, actor } = this.adapter.getSpeakerUuids(entry.message);
         return (target.token && token === target.token) || (target.actor && actor === target.actor);
       });
       if (matches.length) {
@@ -1171,7 +1205,7 @@ export class CompactCards5e {
       const line = document.createElement("section");
       line.className = "icon-row save-summary dcc-pending-save";
       line.innerHTML = `
-        <i class="fa-fw fa-solid fa-dice" aria-label="${game.i18n.localize("DND5E.CHATMESSAGE.Row.Roll")}"></i>
+        <i class="fa-fw fa-solid fa-dice" aria-label="${systemLabel("DND5E.CHATMESSAGE.Row.Roll", "DND5E.Roll")}"></i>
         <ul class="pills unlist"><li class="pill target transparent"></li></ul>
         <span class="dcc-pending-result" aria-label="${this.#localize("pendingSave")}" data-tooltip>&mdash;</span>
       `;
@@ -1192,8 +1226,7 @@ export class CompactCards5e {
    */
   #buildTagRow(origin, content) {
     const face = content.querySelector(".chat-card");
-    const rows = face ? Array.from(face.querySelectorAll(":scope > .icon-row")) : [];
-    let tagRow = rows.find(r => r.querySelector(":scope > i.fa-tag") && r.querySelector(":scope > ul.pills"));
+    let tagRow = face ? this.adapter.getTagRow(face) : null;
 
     const seen = new Set();
     const entries = [];
@@ -1220,7 +1253,7 @@ export class CompactCards5e {
     }
 
     if (tagRow) {
-      const pills = Array.from(tagRow.querySelectorAll(":scope > ul.pills > li.pill"));
+      const pills = Array.from(tagRow.list.querySelectorAll(":scope > li.pill"));
       const types = this.#getPropertyTypes(origin, pills);
       pills.forEach((pill, index) => addEntry(pill.textContent.trim(), types[index]));
     }
@@ -1233,25 +1266,23 @@ export class CompactCards5e {
     }
 
     if (!entries.length) {
-      tagRow?.remove();
+      tagRow?.row.remove();
       return;
     }
 
     entries.sort((a, b) => a.priority - b.priority);
 
-    if (!tagRow) {
-      tagRow = document.createElement("section");
-      tagRow.className = "icon-row";
-      tagRow.innerHTML = `<i class="fa-fw fa-solid fa-tag" aria-label="${game.i18n.localize("DND5E.CHATMESSAGE.Row.Properties")}"></i><ul class="pills unlist"></ul>`;
-    }
-    const list = tagRow.querySelector(":scope > ul.pills");
+    if (!tagRow) tagRow = this.adapter.createTagRow();
+    const { row, list } = tagRow;
     list.replaceChildren(...entries.map(e => this.#createPill(e.label)));
     list.classList.add("dcc-tags");
 
-    if (!tagRow.isConnected && face) {
-      const buttonsRow = rows.find(r => r.querySelector(":scope > ul.unlist:not(.pills)"));
-      if (buttonsRow) buttonsRow.before(tagRow);
-      else face.appendChild(tagRow);
+    if (face) {
+      const buttonsRow = this.adapter.getButtonsRow(face);
+      const followsButtons = buttonsRow && row.isConnected
+        && Boolean(buttonsRow.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING);
+      if (buttonsRow && (!row.isConnected || followsButtons)) buttonsRow.before(row);
+      else if (!row.isConnected) face.appendChild(row);
     }
 
     if (this.#setting("collapseTags") && entries.length > VISIBLE_TAGS) {
@@ -1344,7 +1375,7 @@ export class CompactCards5e {
    * @returns {string}
    */
   #getAttackModeLabel(rollMessage) {
-    const mode = rollMessage.system?.mode;
+    const mode = this.adapter.getAttackMode(rollMessage);
     if (!mode) return "";
     const key = `DND5E.ATTACK.Mode.${mode.split("-").map(s => s.capitalize()).join("")}`;
     return game.i18n.has(key) ? game.i18n.localize(key) : "";
