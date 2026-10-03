@@ -20,6 +20,10 @@ const ROLL_KINDS = {
  * it neither renders them inside the card nor refreshes the card when they change. The adapter
  * builds the `.card-summary` entries the enrichment code expects, hides the folded roll
  * messages in the log, and re-renders the card when a roll is created, updated or deleted.
+ *
+ * With midi-qol active the attack and damage rolls of a card it drives are on the card itself,
+ * written there by its workflow along with the hits it decided. Those are rendered as rows from
+ * the card's own data, midi keeps its roll buttons, and no roll midi made is ever rewritten.
  */
 export class SystemV5Adapter {
   /** @type {string} */
@@ -43,11 +47,15 @@ export class SystemV5Adapter {
   /** @type {boolean} */
   #installed = false;
 
+  /** @type {boolean} Whether midi-qol is active, in which case its cards hold their own attack and damage rolls */
+  midiActive = false;
+
   /**
    * @param {import("../CompactCards5e.mjs").CompactCards5e} cards
    */
   constructor(cards) {
     this.cards = cards;
+    this.midiActive = game.modules?.get("midi-qol")?.active === true;
   }
 
   /**
@@ -178,11 +186,43 @@ export class SystemV5Adapter {
   }
 
   /**
+   * Whether a damage message heals. On a midi-qol card the damage rolls are the card's own, so
+   * their types decide.
    * @param {ChatMessage} message
    * @returns {boolean}
    */
   isHealing(message) {
+    if (this.isMidiCard(message)) {
+      const rolls = this.#midiDamageRolls(message);
+      return rolls.length > 0 && rolls.every(roll => roll.options?.type in (CONFIG.DND5E.healingTypes ?? {}));
+    }
     return message?.getFlag?.("dnd5e", "roll.type") === "healing";
+  }
+
+  /**
+   * Whether a usage card is driven by a midi-qol workflow, which writes its attack and damage
+   * rolls onto the card instead of creating roll messages. The card's midi flags tell, or its
+   * face when the content is at hand, as the flags arrive with midi's first update.
+   * @param {ChatMessage} message
+   * @param {HTMLElement} [content] - The message content element, when rendered
+   * @returns {boolean}
+   */
+  isMidiCard(message, content) {
+    if (!this.midiActive || !this.isUsageMessage(message)) return false;
+    return Boolean(message.flags?.["midi-qol"]) || Boolean(content?.querySelector?.(".chat-card.midi-chat-card"));
+  }
+
+  /**
+   * Whether a roll must not be rewritten. midi-qol decides hits, saves and damage from the rolls
+   * it holds in memory and rewrites its card from them, so every roll it made is left alone: the
+   * rolls on its cards, and roll messages it flagged or that belong to one of its cards.
+   * @param {ChatMessage} message
+   * @returns {boolean}
+   */
+  isRollLocked(message) {
+    if (!this.midiActive) return false;
+    if (this.isUsageMessage(message) || message?.flags?.["midi-qol"]) return true;
+    return Boolean(this.getOrigin(message)?.flags?.["midi-qol"]);
   }
 
   /**
@@ -194,11 +234,16 @@ export class SystemV5Adapter {
   }
 
   /**
+   * Attack mode of an attack message, from its flags or, on a midi-qol card, from the options of
+   * the attack roll on the card
    * @param {ChatMessage} message
    * @returns {string}
    */
   getAttackMode(message) {
-    return message?.getFlag?.("dnd5e", "roll.attackMode") ?? "";
+    const flagged = message?.getFlag?.("dnd5e", "roll.attackMode");
+    if (flagged) return flagged;
+    if (this.isMidiCard(message)) return this.#midiAttackRoll(message)?.options?.attackMode ?? "";
+    return "";
   }
 
   /**
@@ -276,7 +321,8 @@ export class SystemV5Adapter {
   renderSummaries(origin, content) {
     const container = this.getSummaryContainer(content);
     if (!container || container.querySelector(":scope > .card-summary")) return;
-    const anchor = container.querySelector(":scope > effect-application");
+    const anchor = container.querySelector(":scope > :is(damage-application, effect-application)");
+    if (this.isMidiCard(origin, content)) this.#renderMidiSummaries(origin, content, container, anchor);
     for (const message of this.#childrenOf(origin.id)) {
       const kind = this.getRollKind(message);
       if (!FOLDED_KINDS.has(kind) || !message.visible) continue;
@@ -294,6 +340,132 @@ export class SystemV5Adapter {
       if (kind === "damage") this.#prepareDamageTray(message, summary);
       this.#addDeleteControl(message, summary);
     }
+  }
+
+  /**
+   * Renders the attack and damage rolls a midi-qol workflow wrote onto its card as rows after the
+   * card face. midi keeps its roll buttons and its saves display on the face; the attack and
+   * damage results it wrote there are hidden by the stylesheet once a row stands in for them,
+   * which the `dcc-midi-attack` and `dcc-midi-damage` message classes signal. The rows name the
+   * card as their roll message, so the shared code fills their drawers from the card's own rolls.
+   * @param {ChatMessage} origin
+   * @param {HTMLElement} content - The message content element
+   * @param {HTMLElement} container - Element the rows go into
+   * @param {HTMLElement|null} anchor - Element the rows are inserted before, if any
+   */
+  #renderMidiSummaries(origin, content, container, anchor) {
+    const messageElement = content.closest(".chat-message");
+    const attackRoll = this.#midiAttackRoll(origin);
+    const damageRolls = this.#midiDamageRolls(origin);
+    const rows = [];
+    if (attackRoll) {
+      rows.push({ kind: "attack", html: this.#renderTemplate(origin, this.cards.summaryTemplates.attack, this.#midiAttackContext(origin, attackRoll)) });
+    }
+    if (damageRolls.length) {
+      rows.push({ kind: "damage", html: this.#renderTemplate(origin, this.cards.summaryTemplates.damage, this.#midiDamageContext(origin, damageRolls)) });
+    }
+    for (const { kind, html } of rows) {
+      if (!html) continue;
+      const summary = document.createElement("div");
+      summary.className = "card-summary dcc-midi-summary";
+      summary.dataset.messageId = origin.id;
+      summary.innerHTML = html;
+      summary.querySelectorAll(".dnd5e2").forEach(el => el.classList.remove("dnd5e2"));
+      if (anchor) anchor.before(summary);
+      else container.appendChild(summary);
+      messageElement?.classList.add(`dcc-midi-${kind}`);
+    }
+  }
+
+  /**
+   * The attack roll a midi-qol workflow wrote onto its card, if it has rolled one
+   * @param {ChatMessage} message
+   * @returns {Roll|undefined}
+   */
+  #midiAttackRoll(message) {
+    const D20Roll = CONFIG.Dice?.D20Roll;
+    if (!D20Roll) return undefined;
+    return (message?.rolls ?? []).find(roll => roll instanceof D20Roll && roll.validD20Roll);
+  }
+
+  /**
+   * Damage rolls a midi-qol workflow wrote onto its card, bonus and "other" damage included
+   * @param {ChatMessage} message
+   * @returns {Roll[]}
+   */
+  #midiDamageRolls(message) {
+    const DamageRoll = CONFIG.Dice?.DamageRoll;
+    if (!DamageRoll) return [];
+    return (message?.rolls ?? []).filter(roll => roll instanceof DamageRoll);
+  }
+
+  /**
+   * Context for the attack row of a midi-qol card. The roll's options name the weapon mastery it
+   * used, and a result midi showed to the GM only stays hidden from players.
+   * @param {ChatMessage} origin
+   * @param {Roll} roll - The card's attack roll
+   * @returns {object}
+   */
+  #midiAttackContext(origin, roll) {
+    const flags = origin.flags?.["midi-qol"] ?? {};
+    const visible = origin.isContentVisible && (game.user.isGM || !flags.GMOnlyAttackRoll);
+    return this.#buildAttackContext(roll, visible, this.#midiAttackTargets(origin, flags), roll.options?.mastery);
+  }
+
+  /**
+   * Targets of a midi-qol attack with the hit result midi recorded, which already accounts for
+   * its own cover and AC handling. Before midi has recorded hits, or when it is set not to check
+   * them, the card's recorded targets are returned and the row compares the roll with their AC.
+   * @param {ChatMessage} origin
+   * @param {object} flags - The card's midi-qol flags
+   * @returns {object[]}
+   */
+  #midiAttackTargets(origin, flags) {
+    const recorded = Array.isArray(flags.targets) ? flags.targets : [];
+    if (!recorded.length || !Array.isArray(flags.hitTargetUuids) || !this.#midiChecksHits()) return this.getTargets(origin);
+    const hits = new Set(flags.hitTargetUuids);
+    return recorded.map(target => {
+      const actor = this.#tokenActor(target.uuid);
+      const ac = actor?.statuses?.has("coverTotal") ? null : actor?.system?.attributes?.ac?.value;
+      return { name: target.name, img: actor?.img, ac: ac ?? null, actor: actor?.uuid, hit: hits.has(target.uuid) };
+    });
+  }
+
+  /**
+   * The actor of a token document uuid, if it resolves
+   * @param {string} uuid
+   * @returns {Actor|null}
+   */
+  #tokenActor(uuid) {
+    try {
+      return fromUuidSync(uuid)?.actor ?? null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * Whether midi-qol is set to decide hits itself
+   * @returns {boolean}
+   */
+  #midiChecksHits() {
+    try {
+      return game.settings.get("midi-qol", "ConfigSettings")?.autoCheckHit !== "none";
+    } catch (error) {
+      return true;
+    }
+  }
+
+  /**
+   * Context for the damage row of a midi-qol card. The system already renders the GM's damage
+   * tray and the damage-on-save note on the card, since the rolls are the card's own, so the row
+   * carries neither.
+   * @param {ChatMessage} origin
+   * @param {Roll[]} rolls - The card's damage rolls
+   * @returns {object}
+   */
+  #midiDamageContext(origin, rolls) {
+    return this.#buildDamageContext(rolls, !origin.isContentVisible, "", false);
   }
 
   /**
@@ -328,19 +500,32 @@ export class SystemV5Adapter {
   }
 
   /**
-   * Context for the attack summary template: the total button with the classes the system's
-   * highlighting would give it, the weapon mastery and the recorded targets with hit or miss
-   * evaluated the way the system's attack card does
+   * Context for the attack summary of a roll message, from its roll, its visibility, its recorded
+   * targets and the weapon mastery it used
    * @param {ChatMessage} message
    * @returns {object}
    */
   #attackContext(message) {
     const roll = message.rolls.find(r => r?.validD20Roll) ?? message.rolls[0];
-    const visible = message.isContentVisible;
+    return this.#buildAttackContext(roll, message.isContentVisible, this.getTargets(message), message.getFlag("dnd5e", "roll.mastery"));
+  }
+
+  /**
+   * Context for the attack summary template: the total button with the classes the system's
+   * highlighting would give it, the weapon mastery and the targets with hit or miss, taken from
+   * a target's own `hit` when it carries one and otherwise evaluated the way the system's attack
+   * card does
+   * @param {Roll|undefined} roll
+   * @param {boolean} visible - Whether the current user may see the result
+   * @param {object[]} targets - `{ name, ac, hit? }` entries
+   * @param {string} [masteryKey] - Weapon mastery the attack used, if any
+   * @returns {object}
+   */
+  #buildAttackContext(roll, visible, targets, masteryKey) {
     const visibility = this.#setting("attackRollVisibility", "all");
     const showResult = visible && (game.user.isGM || visibility !== "none");
     const showAC = game.user.isGM || visibility === "all";
-    const masteryConfig = CONFIG.DND5E.weaponMasteries?.[message.getFlag("dnd5e", "roll.mastery")];
+    const masteryConfig = masteryKey ? CONFIG.DND5E.weaponMasteries?.[masteryKey] : null;
     const mastery = masteryConfig ? { label: game.i18n.localize(masteryConfig.label), reference: masteryConfig.reference } : null;
     const classes = [];
     if (roll && showResult) {
@@ -348,16 +533,17 @@ export class SystemV5Adapter {
       if (roll.isFumble) classes.push("fumble");
       if (Number.isNumeric(roll.options?.target)) classes.push(roll.isSuccess ? "success" : "failure");
     }
-    const targets = this.getTargets(message).map(target => {
+    const entries = targets.map(target => {
       const hasAC = Number.isNumeric(target.ac);
-      const isMiss = Boolean(roll && showResult && !roll.isCritical && ((hasAC && roll.total < target.ac) || roll.isFumble));
+      const missByAC = Boolean(roll && !roll.isCritical && ((hasAC && roll.total < target.ac) || roll.isFumble));
+      const isMiss = showResult && (typeof target.hit === "boolean" ? !target.hit : missByAC);
       return { name: target.name, ac: target.ac, hasAC, showAC, showResult, isMiss, plain: true };
     });
     return {
       header: {},
       mastery,
       rolls: [this.#totalButton(roll, visible, classes)],
-      targets,
+      targets: entries,
       targetsLabel: systemLabel("DND5E.CHATMESSAGE.Row.Targets", "DND5E.TargetPl", "DND5E.Targets"),
       rows: { properties: { entries: [] } },
       legacy: true
@@ -365,28 +551,37 @@ export class SystemV5Adapter {
   }
 
   /**
-   * Context for the damage summary template: one part per aggregated damage type, the grand
-   * total, the damage-on-save note and whether the GM's damage tray is shown
+   * Context for the damage summary of a roll message, whose GM gets the damage tray
    * @param {ChatMessage} message
    * @returns {object}
    */
   #damageContext(message) {
-    const rolls = message.rolls;
-    const isPrivate = !message.isContentVisible;
+    return this.#buildDamageContext(message.rolls, !message.isContentVisible, message.getFlag("dnd5e", "roll.damageOnSave"), game.user.isGM);
+  }
+
+  /**
+   * Context for the damage summary template: one part per aggregated damage type, the grand
+   * total, the damage-on-save note and whether the GM's damage tray is shown
+   * @param {Roll[]} rolls
+   * @param {boolean} isPrivate - Whether the result is hidden from the current user
+   * @param {string} onSaveKey - The damage-on-save option to note, if any
+   * @param {boolean} showTray
+   * @returns {object}
+   */
+  #buildDamageContext(rolls, isPrivate, onSaveKey, showTray) {
     const parts = this.#aggregate(rolls).map(roll => {
       const type = roll.options?.type;
       const config = CONFIG.DND5E.damageTypes?.[type] ?? CONFIG.DND5E.healingTypes?.[type];
       return { type, config, total: roll.total, label: config?.label ?? "" };
     });
     const total = rolls.reduce((sum, roll) => sum + (roll.total ?? 0), 0);
-    const onSaveKey = message.getFlag("dnd5e", "roll.damageOnSave");
     const onSaveI18n = onSaveKey ? `DND5E.SAVE.FIELDS.damage.onSave.${onSaveKey.capitalize()}` : "";
     return {
       parts,
       total,
       isPrivate,
       onSave: onSaveI18n && game.i18n.has(onSaveI18n) ? game.i18n.localize(onSaveI18n) : "",
-      showTray: game.user.isGM,
+      showTray,
       rows: { properties: { entries: [] } },
       legacy: true
     };
@@ -529,12 +724,13 @@ export class SystemV5Adapter {
   }
 
   /**
-   * The card footer holds the card's tags on 5.x, so it is both the row and the list
+   * The card footer holds the card's tags on 5.x, so it is both the row and the list. midi-qol's
+   * card keeps its footer inside the buttons block.
    * @param {HTMLElement} face - The `.chat-card` element
    * @returns {{ row: HTMLElement, list: HTMLElement }|null}
    */
   getTagRow(face) {
-    const list = face.querySelector(":scope > ul.card-footer.pills");
+    const list = face.querySelector(":scope > ul.card-footer.pills, :scope > .card-buttons > ul.card-footer.pills");
     return list ? { row: list, list } : null;
   }
 

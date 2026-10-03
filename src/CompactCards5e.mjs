@@ -379,10 +379,8 @@ export class CompactCards5e {
   }
 
   /**
-   * Picks the adapter for the running dnd5e version, checks that the system pieces it relies on
-   * exist, and declines when a conflicting module is active. midi-qol keeps its rolls inside its
-   * own card and rewrites that card's rolls from memory, so nothing here can safely fold or
-   * change them.
+   * Picks the adapter for the running dnd5e version and checks that the system pieces it relies
+   * on exist
    * @returns {boolean}
    */
   #checkSupport() {
@@ -395,7 +393,6 @@ export class CompactCards5e {
     if (!adapter) return fail(`dnd5e ${game.system.version} < ${MIN_SYSTEM_VERSION}`);
     const reason = adapter.checkSupport();
     if (reason) return fail(reason);
-    if (game.modules.get("midi-qol")?.active) return fail("midi-qol active");
     this.adapter = adapter;
     this.unsupportedReason = "";
     return true;
@@ -628,8 +625,9 @@ export class CompactCards5e {
    * Whether the current user may change this roll's advantage mode after the fact: the message
    * must be theirs or they must be the GM, the d20 must be a plain die (one die, or the two or
    * three an advantage or disadvantage roll keeps one of) without explosions, and Ready Set Roll
-   * must not be providing the same controls. Rerolls are fine: a die Halfling Lucky rerolled
-   * away is set aside, and a Reliable Talent minimum only marks a result as rerolled.
+   * must not be providing the same controls, nor may the adapter have locked the roll, as it does
+   * for rolls midi-qol made. Rerolls are fine: a die Halfling Lucky rerolled away is set aside,
+   * and a Reliable Talent minimum only marks a result as rerolled.
    * @param {ChatMessage} rollMessage
    * @param {Roll} roll - The message's d20 roll
    * @returns {boolean}
@@ -637,6 +635,7 @@ export class CompactCards5e {
   #canChangeAdvantage(rollMessage, roll) {
     if (!this.#setting("retroAdvantage")) return false;
     if (game.modules.get(READY_SET_ROLL_ID)?.active) return false;
+    if (this.adapter.isRollLocked(rollMessage)) return false;
     if (!rollMessage.canUserModify?.(game.user, "update")) return false;
     if (!roll?._evaluated || !roll.validD20Roll) return false;
     const die = roll.d20;
@@ -847,7 +846,8 @@ export class CompactCards5e {
         icon.replaceChildren(svg);
       }
     }
-    if (rollMessage.rolls[0]?.isCritical) {
+    const damageRoll = rollMessage.rolls.find(r => r instanceof CONFIG.Dice.DamageRoll) ?? rollMessage.rolls[0];
+    if (damageRoll?.isCritical) {
       row.classList.add("critical");
     }
     if (game.user.isGM) {
@@ -882,7 +882,7 @@ export class CompactCards5e {
       toggle.classList.add("dcc-no-drawer");
       return;
     }
-    const key = `${origin.id}:${rollMessage.id}`;
+    const key = `${origin.id}:${rollMessage.id}:${row.dataset.rollType ?? ""}`;
     const setOpen = (open) => {
       drawer.hidden = !open;
       row.classList.toggle("open", open);

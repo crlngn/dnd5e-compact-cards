@@ -118,6 +118,15 @@ export class SystemV6Adapter {
   }
 
   /**
+   * Whether a roll must not be rewritten. No module holds rolls of its own on 6.0.
+   * @param {ChatMessage} message
+   * @returns {boolean}
+   */
+  isRollLocked(message) {
+    return false;
+  }
+
+  /**
    * @param {ChatMessage} message
    * @returns {string}
    */

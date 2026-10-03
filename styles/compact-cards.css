@@ -578,6 +578,13 @@ body.dnd5e-compact-cards :is(.chat-popout, #chat-log, .chat-log, #chat-notificat
     margin-block: 4px;
     justify-content: flex-start;
   }
+
+  /* On a midi-qol card the attack and damage results midi writes into its buttons block are
+     shown as rows instead; midi's roll buttons and its saves display stay */
+  &.dcc-midi-attack .midi-results :is(.midi-qol-attack-roll, .midi-qol-hits-display),
+  &.dcc-midi-damage .midi-results :is(.midi-qol-damage-roll, .midi-qol-other-damage-roll, .midi-qol-bonus-damage-roll) {
+    display: none;
+  }
   ul.card-footer.dcc-tags > li.pill,
   .dcc-row-pills > li.pill,
   .dcc-row-targets .pill {

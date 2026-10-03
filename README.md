@@ -29,9 +29,12 @@ flags switch the 5.x markup on, since 5.x has no `target-pill` element or damage
 breakdown partial. The retroactive advantage code is the same on both generations,
 as the D20 die model is identical.
 
-Support is declined when midi-qol is active on either generation: midi keeps its
-rolls inside its own card and rewrites that card's rolls from memory, so folding
-or changing them would desync its workflow.
+With midi-qol active on 5.x, midi keeps its own roll buttons and writes attack
+and damage rolls onto the usage card itself, with the hits it decided in its
+flags. The 5.x adapter renders those as rows from the card's own data and hides
+the results midi wrote into the card; midi's saves display stays. No roll midi
+made is ever rewritten, so the retroactive advantage controls are off for them:
+midi decides hits, saves and damage from the rolls it holds in memory.
 
 The package is source only. Each host bundles `src/` with Vite, imports the
 stylesheet, and copies the two templates into its own `templates/` folder.
