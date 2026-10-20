@@ -54,13 +54,15 @@ Hooks.once("init", () => {
       setCompactCards: value => game.settings.set("my-module", "compact-activity-cards", value),
       collapseTags: () => game.settings.get("my-module", "collapse-card-tags"),
       labeledButtons: () => game.settings.get("my-module", "labeled-card-buttons"),
-      retroAdvantage: () => game.settings.get("my-module", "retro-advantage-buttons")
+      retroAdvantage: () => game.settings.get("my-module", "retro-advantage-buttons"),
+      collapseRepeatedRolls: () => game.settings.get("my-module", "collapse-repeated-rolls")
     },
     hooks: { renderRoll: "my-module.renderCompactRoll", renderCard: "my-module.renderCompactCard" },
     log: (ref, data) => console.debug(ref, ...data)
   });
   // Call cards.applyCompactCards(value) / applyCollapseTags(value) / applyLabeledButtons(value)
-  // / applyRetroAdvantage(value) from the settings' onChange handlers.
+  // / applyRetroAdvantage(value) / applyCollapseRepeatedRolls(value) from the settings'
+  // onChange handlers.
 });
 ```
 
@@ -76,6 +78,28 @@ Build steps for a host:
 - `import "../shared/dnd5e-compact-cards/styles/compact-cards.css"` from the module entry.
 - Copy `templates/*.hbs` into the host's `dist/templates` (rollup-plugin-copy target).
 - Copy `lang/en.json` under the `i18nPrefix` in every language the host ships.
+
+## Repeated rolls
+
+An activity rolled several times from one card, such as Flurry of Blows, keeps every
+attack and damage row in the order rolled. When a card holds more than one row of a
+kind, their titles are numbered (Attack 1, Attack 2...). With the host's optional
+`collapseRepeatedRolls` setting on (on when missing), all but the newest row of each
+kind start collapsed to their title, which then shows the roll's total; clicking the
+title toggles the row with its drawer, targets and damage application, and the choice
+is kept across re-renders.
+
+## GM bonus
+
+Attack and damage rows carry a + button for the GM, before the row's delete control,
+that adds a bonus to the roll after it was made. The dialog takes a roll formula,
+typed or built by clicking the d4 to d100 buttons; a formula starting with `-` is
+subtracted. The bonus is rolled (shown through Dice So Nice when present), its terms
+are appended to the attack's d20 roll or the first damage roll, and the formula and
+total are recomputed, so hits, misses and the damage tray follow the new total. Each
+bonus is listed under `flags.<host>.gmBonus` and shown as a pill on the row. Rolls
+midi-qol made are left alone. `instance.addBonus(rollMessage, formula, rollIndex?)`
+exposes the same operation for macros.
 
 ## One active copy
 

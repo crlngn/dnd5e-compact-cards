@@ -81,6 +81,7 @@ body.dnd5e-compact-cards {
       min-width: 0;
     }
     .dcc-row-label {
+      min-width: 5.4em;
       font-weight: 600;
       font-size: var(--font-size-13);
       line-height: 1.4;
@@ -209,6 +210,62 @@ body.dnd5e-compact-cards {
     }
     .dcc-save-group.collapsed > .dcc-save-list {
       display: none;
+    }
+
+    /* The GM's bonus button sits before the row's delete control */
+    .dcc-bonus-button {
+      margin-inline-start: auto;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      font-size: var(--font-size-11);
+      color: var(--color-text-secondary);
+
+      &:hover,
+      &:focus-visible {
+        color: var(--color-text-primary);
+      }
+    }
+    .dcc-bonus-button ~ .message-delete {
+      margin-inline-start: 0;
+    }
+
+    /* Repeated attack and damage rows collapse to their title, which then shows the roll's total */
+    .dcc-row-title.dcc-collapsible {
+      cursor: var(--cursor-pointer, pointer);
+    }
+    .dcc-roll-toggle {
+      display: inline-flex;
+      align-items: center;
+      font-size: var(--font-size-10);
+      color: var(--color-text-secondary);
+      transition: transform 0.15s ease;
+    }
+    .dcc-roll-peek {
+      display: none;
+      font-weight: 700;
+      font-size: var(--font-size-13);
+      color: var(--dcc-pill-text);
+    }
+    .card-summary.dcc-roll-collapsed {
+      padding-block-end: 4px;
+
+      > :not(.dcc-row-title) {
+        display: none;
+      }
+      .dcc-roll-toggle {
+        transform: rotate(180deg);
+      }
+      .dcc-roll-peek {
+        display: inline;
+        margin-inline-start: auto;
+        padding-inline-end: 6px;
+      }
+      .dcc-roll-peek ~ :is(.dcc-bonus-button, .message-delete) {
+        margin-inline-start: 0;
+      }
     }
 
     /* Save activities list their targets in the save section instead of the card's targets row */
@@ -687,8 +744,17 @@ body.dnd5e-compact-cards :is(.chat-popout, #chat-log, .chat-log, #chat-notificat
       cursor: default;
     }
   }
-  /* Advantage mode pill; a small history icon marks a mode changed after the roll */
-  .dcc-advantage-tag > i {
+  /* Advantage mode pill; a small history icon marks a mode changed after the roll. A small
+     square plus marks the pill listing the GM's bonuses */
+  .dcc-row-pills > .pill:has(> i) {
+    display: inline-flex;
+    align-items: center;
+
+    > i {
+      line-height: 1;
+    }
+  }
+  :is(.dcc-advantage-tag, .dcc-bonus-tag) > i {
     font-size: var(--font-size-10);
     margin-inline-end: 3px;
     opacity: 0.8;
@@ -730,3 +796,21 @@ body.dnd5e-compact-cards :is(.chat-popout, #chat-log, .chat-log, #chat-notificat
   }
 }
 /* Compact activity cards - end */
+
+/* Bonus dialog: a formula field and one button per die size */
+.application.dcc-bonus-dialog {
+  .dcc-bonus-dice {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 4px;
+    margin-block: 8px 4px;
+  }
+  .dcc-bonus-die {
+    height: 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    padding: 0;
+  }
+}

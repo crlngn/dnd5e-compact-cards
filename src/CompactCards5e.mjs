@@ -6,9 +6,6 @@ import { FOLDED_KINDS } from "./rollKinds.mjs";
 /** Number of tags shown before the row collapses behind a "+N" chip */
 const VISIBLE_TAGS = 3;
 
-/** Kinds of roll of which only the newest is shown on a card, since a new one replaces the last */
-const LATEST_ONLY_KINDS = new Set(["attack", "damage"]);
-
 /**
  * Display priority of usage card tags by dnd5e property type, per item kind. Lower sorts first.
  * Keys are the property type, or `property:<id>` for a specific item property such as concentration.
@@ -69,6 +66,20 @@ export const DND5E_SUMMARY_SETTING = "chatCardSummary";
 /** Flag, under the host module's scope, recording a roll whose advantage mode was changed after the fact */
 export const RETRO_FLAG = "retroAdvantage";
 
+/** Flag, under the host module's scope, listing the bonuses the GM added to a roll after the fact */
+export const BONUS_FLAG = "gmBonus";
+
+/** Dice offered as buttons in the bonus dialog, with the icons drawn for each */
+const BONUS_DICE = [
+  { die: "d4", icon: `<i class="fa-solid fa-dice-d4" inert></i>` },
+  { die: "d6", icon: `<i class="fa-solid fa-dice-d6" inert></i>` },
+  { die: "d8", icon: `<i class="fa-solid fa-dice-d8" inert></i>` },
+  { die: "d10", icon: `<i class="fa-solid fa-dice-d10" inert></i>` },
+  { die: "d12", icon: `<i class="fa-solid fa-dice-d12" inert></i>` },
+  { die: "d20", icon: `<i class="fa-solid fa-dice-d20" inert></i>` },
+  { die: "d100", icon: `<i class="fa-solid fa-dice-d10" inert></i><i class="fa-solid fa-dice-d10" inert></i>` }
+];
+
 /** Module that provides its own retroactive advantage buttons, so this feature stays out of its way */
 const READY_SET_ROLL_ID = "ready-set-roll-5e";
 
@@ -79,6 +90,7 @@ const READY_SET_ROLL_ID = "ready-set-roll-5e";
  * @property {() => boolean} collapseTags - Whether the host's collapse tags setting is on
  * @property {() => boolean} labeledButtons - Whether the host's labeled buttons setting is on
  * @property {() => boolean} [retroAdvantage] - Whether the host's retroactive advantage buttons setting is on; treated as on when missing
+ * @property {() => boolean} [collapseRepeatedRolls] - Whether all but the newest of repeated attack and damage rolls on a card start collapsed; treated as on when missing
  */
 
 /**
@@ -126,6 +138,8 @@ export class CompactCards5e {
   #tagStates = new Map();
   /** @type {Map<string, boolean>} Open state of save sections, keyed by `${originId}:${ability}` */
   #saveStates = new Map();
+  /** @type {Map<string, boolean>} Open state of repeated attack and damage rolls, keyed by `${originId}:${rollMessageId}:${rollType}` */
+  #rollStates = new Map();
   /** @type {boolean} Whether a setting write started by this copy is in progress, so its change is not mirrored back */
   #syncing = false;
 
@@ -348,6 +362,16 @@ export class CompactCards5e {
   }
 
   /**
+   * Applies the collapse repeated rolls setting by re-rendering the chat log
+   * @param {boolean} [value] - New setting value, when called from a setting change
+   */
+  applyCollapseRepeatedRolls(value) {
+    if (!this.activated) return;
+    this.#rollStates.clear();
+    this.#rerenderChat();
+  }
+
+  /**
    * Applies the labeled buttons setting through a body class. Like the rest of the feature this
    * only acts on supported dnd5e versions, where the cards it styles exist.
    * @param {boolean} [value] - New setting value, when called from a setting change
@@ -421,8 +445,8 @@ export class CompactCards5e {
     if (!this.isActive) return;
     try {
       this.adapter.renderSummaries(message, content);
-      this.#dropSupersededSummaries(content);
       this.#enrichSummaries(message, content);
+      this.#numberRepeatedRolls(message, content);
       this.#groupSaves(message, content);
       this.#buildTagRow(message, content);
       this.#buildTargetControls(message, content);
@@ -473,22 +497,6 @@ export class CompactCards5e {
   }
 
   /**
-   * Removes the summaries of attack and damage rolls that a later roll of the same kind replaced,
-   * so rolling again swaps the row instead of adding one. The messages themselves are kept; the
-   * summaries come in timestamp order, so the last of a kind is the newest.
-   * @param {HTMLElement} content
-   */
-  #dropSupersededSummaries(content) {
-    const latest = new Map();
-    for (const summary of content.querySelectorAll(".card-summary[data-message-id]")) {
-      const kind = this.adapter.getRollKind(game.messages.get(summary.dataset.messageId));
-      if (!LATEST_ONLY_KINDS.has(kind)) continue;
-      latest.get(kind)?.remove();
-      latest.set(kind, summary);
-    }
-  }
-
-  /**
    * Fills the drawers of attack and damage summaries with roll details and wires their toggles
    * @param {ChatMessage} origin
    * @param {HTMLElement} content
@@ -508,12 +516,263 @@ export class CompactCards5e {
         this.#fillDamageRow(rollMessage, row, drawer, title);
       }
       this.#wireDrawer(origin, rollMessage, row, drawer);
+      this.#addBonusPill(rollMessage, row);
+      this.#addBonusButton(rollMessage, summary, row.dataset.rollType);
       this.#callHooks("renderRoll", COMPACT_CARDS_HOOKS.RENDER_ROLL, { origin, rollMessage, summary, row, drawer });
     }
     for (const summary of summaries) {
       const rollMessage = game.messages.get(summary.dataset.messageId);
       if (this.adapter.getRollKind(rollMessage) === "check") this.#enrichSystemRollRows(rollMessage, summary);
     }
+  }
+
+  /**
+   * Numbers the titles of attack and damage rows when a card holds more than one of a kind, as
+   * when an activity is rolled several times from the same card, and, with the host's collapse
+   * repeated rolls setting on, collapses all but the newest of each kind
+   * @param {ChatMessage} origin
+   * @param {HTMLElement} content
+   */
+  #numberRepeatedRolls(origin, content) {
+    const groups = new Map();
+    for (const summary of content.querySelectorAll(".card-summary[data-message-id]")) {
+      const type = summary.querySelector(":scope > .dcc-roll-row")?.dataset.rollType;
+      if (!type) continue;
+      if (!groups.has(type)) groups.set(type, []);
+      groups.get(type).push(summary);
+    }
+    const collapse = this.#setting("collapseRepeatedRolls");
+    for (const [type, summaries] of groups) {
+      if (summaries.length < 2) continue;
+      summaries.forEach((summary, index) => {
+        const label = summary.querySelector(":scope > .dcc-row-title > .dcc-row-label");
+        if (label) {
+          label.dataset.baseLabel ??= label.textContent.trim();
+          label.textContent = `${label.dataset.baseLabel} ${index + 1}`;
+        }
+        if (collapse) this.#wireRollCollapse(origin, summary, type, index === summaries.length - 1);
+      });
+    }
+  }
+
+  /**
+   * Makes a repeated attack or damage row collapse to its title. Clicking the title toggles the
+   * row, its drawer, targets and damage application; while collapsed the title shows the roll's
+   * total. The state is kept per card and roll so re-renders restore it, and a roll the user has
+   * not toggled is open only while it is the newest of its kind.
+   * @param {ChatMessage} origin
+   * @param {HTMLElement} summary
+   * @param {string} type - Roll type of the row, "attack" or "damage"
+   * @param {boolean} isLatest - Whether this is the newest roll of its kind on the card
+   */
+  #wireRollCollapse(origin, summary, type, isLatest) {
+    const title = summary.querySelector(":scope > .dcc-row-title");
+    const label = title?.querySelector(":scope > .dcc-row-label");
+    if (!label || title.querySelector(":scope > .dcc-roll-toggle")) return;
+    const key = `${origin.id}:${summary.dataset.messageId}:${type}`;
+    const total = summary.querySelector(":scope > .dcc-roll-row .dcc-row-total :is(.total, .dice-total)")?.textContent.trim();
+    const toggle = document.createElement("span");
+    toggle.className = "dcc-roll-toggle";
+    toggle.innerHTML = `<i class="fa-solid fa-chevron-up" inert></i>`;
+    label.after(toggle);
+    if (total) {
+      const peek = document.createElement("span");
+      peek.className = "dcc-roll-peek";
+      peek.textContent = total;
+      toggle.after(peek);
+    }
+    title.classList.add("dcc-collapsible");
+    title.dataset.tooltip = this.#localize("toggleRoll");
+    const setOpen = (open) => {
+      summary.classList.toggle("dcc-roll-collapsed", !open);
+      title.setAttribute("aria-expanded", String(open));
+    };
+    setOpen(this.#rollStates.get(key) ?? isLatest);
+    title.addEventListener("click", (event) => {
+      if (event.target.closest("button, a, input, .message-delete")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const open = summary.classList.contains("dcc-roll-collapsed");
+      this.#rollStates.set(key, open);
+      setOpen(open);
+    });
+  }
+
+  /**
+   * Index of the roll a bonus is added to: the d20 roll of an attack, the first damage roll of a
+   * damage or healing message
+   * @param {ChatMessage} rollMessage
+   * @param {string} type - Roll type of the row, "attack" or "damage"
+   * @returns {number}
+   */
+  #bonusRollIndex(rollMessage, type) {
+    const rolls = rollMessage.rolls ?? [];
+    const index = type === "attack"
+      ? rolls.findIndex(r => r?.validD20Roll)
+      : rolls.findIndex(r => r instanceof CONFIG.Dice.DamageRoll);
+    return index >= 0 ? index : (rolls.length ? 0 : -1);
+  }
+
+  /**
+   * Whether the current user may add a bonus to this roll: only the GM, on an evaluated roll the
+   * adapter has not locked, as it does for rolls midi-qol made
+   * @param {ChatMessage} rollMessage
+   * @param {Roll} roll
+   * @returns {boolean}
+   */
+  #canAddBonus(rollMessage, roll) {
+    if (!game.user.isGM || !roll?._evaluated) return false;
+    return !this.adapter.isRollLocked(rollMessage);
+  }
+
+  /**
+   * Adds the pill listing the bonuses the GM added to a roll after it was made
+   * @param {ChatMessage} rollMessage
+   * @param {HTMLElement} row
+   */
+  #addBonusPill(rollMessage, row) {
+    if (!rollMessage.isContentVisible) return;
+    const bonuses = rollMessage.getFlag(this.options.id, BONUS_FLAG);
+    const pills = row.querySelector(".dcc-row-pills");
+    if (!bonuses?.length || !pills) return;
+    const label = bonuses.map(b => b.formula).join(" ");
+    const pill = this.#createPill(label, "dcc-row-tag dcc-bonus-tag");
+    pill.setAttribute("aria-label", this.#localize("bonusAdded"));
+    pill.setAttribute("data-tooltip", "");
+    pill.insertAdjacentHTML("afterbegin", `<i class="fa-solid fa-square-plus" inert></i>`);
+    pills.appendChild(pill);
+  }
+
+  /**
+   * Adds, for the GM, the button in an attack or damage row's title that opens the bonus dialog
+   * and adds the rolled bonus to the roll. It sits before the row's delete control.
+   * @param {ChatMessage} rollMessage
+   * @param {HTMLElement} summary
+   * @param {string} type - Roll type of the row, "attack" or "damage"
+   */
+  #addBonusButton(rollMessage, summary, type) {
+    const index = this.#bonusRollIndex(rollMessage, type);
+    if (index < 0 || !this.#canAddBonus(rollMessage, rollMessage.rolls[index])) return;
+    const title = summary.querySelector(":scope > .dcc-row-title");
+    if (!title || title.querySelector(":scope > .dcc-bonus-button")) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "unbutton dcc-bonus-button";
+    button.setAttribute("aria-label", this.#localize("addBonus"));
+    button.setAttribute("data-tooltip", "");
+    button.innerHTML = `<i class="fa-solid fa-plus" inert></i>`;
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        const formula = await this.#promptBonusFormula();
+        if (formula) await this.addBonus(rollMessage, formula, index);
+      } catch (error) {
+        this.#warn("CompactCards5e.addBonus", [error]);
+        ui.notifications?.warn(this.#localize("bonusFailed"));
+      } finally {
+        button.disabled = false;
+      }
+    });
+    const del = title.querySelector(":scope > .message-delete");
+    if (del) del.before(button);
+    else title.appendChild(button);
+  }
+
+  /**
+   * Asks the GM for a bonus formula: typed, or built by clicking the dice buttons, each click
+   * adding one die of that size
+   * @returns {Promise<string|null>} The formula, or null when the dialog was dismissed
+   */
+  async #promptBonusFormula() {
+    const dice = BONUS_DICE.map(({ die, icon }) =>
+      `<button type="button" class="dcc-bonus-die" data-die="${die}" data-tooltip="${die}" aria-label="${die}">${icon}</button>`
+    ).join("");
+    const content = `
+      <div class="form-group stacked">
+        <label>${this.#localize("bonusFormula")}</label>
+        <input type="text" name="formula" placeholder="${this.#localize("bonusPlaceholder")}" autocomplete="off" autofocus>
+      </div>
+      <div class="dcc-bonus-dice">${dice}</div>`;
+    const formula = await foundry.applications.api.DialogV2.prompt({
+      window: { title: this.#localize("addBonus"), icon: "fa-solid fa-plus" },
+      classes: ["dcc-bonus-dialog"],
+      position: { width: 400 },
+      content,
+      ok: {
+        label: this.#localize("applyBonus"),
+        icon: "fa-solid fa-check",
+        callback: (event, button) => button.form.elements.formula.value.trim()
+      },
+      render: (event, dialog) => {
+        const input = dialog.element.querySelector("input[name=formula]");
+        dialog.element.querySelectorAll(".dcc-bonus-die").forEach(die => die.addEventListener("click", () => {
+          input.value = this.#addDieToFormula(input.value.trim(), die.dataset.die);
+          input.focus();
+        }));
+      }
+    });
+    return formula || null;
+  }
+
+  /**
+   * Adds one die of a size to a formula, raising the count of a term of that size already in it
+   * @param {string} formula
+   * @param {string} die - e.g. "d6"
+   * @returns {string}
+   */
+  #addDieToFormula(formula, die) {
+    const faces = die.slice(1);
+    const rgx = new RegExp(`(^|[^\\d])(\\d*)d${faces}(?!\\d)`, "i");
+    const match = formula.match(rgx);
+    if (match) return formula.replace(rgx, `${match[1]}${parseInt(match[2] || "1") + 1}d${faces}`);
+    return formula ? `${formula} + 1${die}` : `1${die}`;
+  }
+
+  /**
+   * Rolls a bonus and adds it to an already rolled roll, storing the result on its message. A
+   * formula starting with "-" is subtracted. The bonus dice show through Dice So Nice when
+   * present, the formula and total of the roll are recomputed, and the bonus is listed in a flag
+   * so the row can show it. Hit or miss and the damage applied follow from the new total when the
+   * card re-renders.
+   * @param {ChatMessage} rollMessage - An attack, damage or healing roll message
+   * @param {string} formula - The bonus formula, e.g. "1d4" or "-2"
+   * @param {number} [rollIndex] - Index of the roll to change; defaults to the message's first roll
+   * @returns {Promise<ChatMessage|null>} The updated message, or null when nothing changed
+   */
+  async addBonus(rollMessage, formula, rollIndex) {
+    const index = rollIndex ?? 0;
+    const roll = rollMessage.rolls[index];
+    if (!this.#canAddBonus(rollMessage, roll)) return null;
+    const trimmed = String(formula ?? "").trim();
+    const sign = trimmed.startsWith("-") ? "-" : "+";
+    const body = trimmed.replace(/^[+-]\s*/, "");
+    if (!body || !Roll.validate(body)) {
+      ui.notifications?.warn(this.#localize("bonusInvalid"));
+      return null;
+    }
+    const rollData = ChatMessage.getSpeakerActor(rollMessage.speaker)?.getRollData() ?? {};
+    const bonus = await new Roll(body, rollData).evaluate();
+    try {
+      await game.dice3d?.showForRoll(bonus, game.user, true, rollMessage.whisper, rollMessage.blind);
+    } catch (error) {
+      this.#log("CompactCards5e.addBonus - dice3d", [error]);
+    }
+    roll.terms.push(new foundry.dice.terms.OperatorTerm({ operator: sign }), ...bonus.terms);
+    roll._total = roll._evaluateTotal();
+    roll.resetFormula();
+
+    const rolls = rollMessage.rolls.map((r, i) => (i === index ? roll : r).toJSON());
+    const bonuses = [
+      ...(rollMessage.getFlag(this.options.id, BONUS_FLAG) ?? []),
+      { formula: `${sign}${bonus.formula}`, total: sign === "-" ? -bonus.total : bonus.total, index }
+    ];
+    return rollMessage.update({
+      rolls,
+      [`flags.${this.options.id}.${BONUS_FLAG}`]: bonuses
+    });
   }
 
   /**

@@ -24,5 +24,13 @@
   "retroChanged": "Changed after the roll",
   "retroFailed": "The roll could not be changed.",
   "normalRoll": "Normal",
-  "noRecordedTargets": "This roll recorded no targets on the current scene."
+  "noRecordedTargets": "This roll recorded no targets on the current scene.",
+  "toggleRoll": "Show or hide this roll",
+  "addBonus": "Add a bonus",
+  "bonusFormula": "Roll formula",
+  "bonusPlaceholder": "type formula or select below",
+  "applyBonus": "Add bonus",
+  "bonusInvalid": "The bonus formula is not valid.",
+  "bonusFailed": "The bonus could not be added.",
+  "bonusAdded": "Bonus after roll"
 }
