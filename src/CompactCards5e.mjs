@@ -1167,7 +1167,7 @@ export class CompactCards5e {
    */
   #groupSaves(origin, content) {
     const activity = origin.getAssociatedActivity?.();
-    const isSaveActivity = activity?.type === "save";
+    const isSaveActivity = this.#listsSaveTargets(origin, content, activity);
     const entries = [];
     for (const summary of content.querySelectorAll(".card-summary[data-message-id]")) {
       const message = game.messages.get(summary.dataset.messageId);
@@ -1256,6 +1256,21 @@ export class CompactCards5e {
   }
 
   /**
+   * Whether a card lists its targets in a save section of its own. True for save activities,
+   * unless another module such as midi-qol rolls the saves and shows them on the card itself:
+   * then no save message ever arrives, and the section would only hold placeholders. Such cards
+   * are treated like any other card, so only save summaries dnd5e did render are grouped.
+   * @param {ChatMessage} origin
+   * @param {HTMLElement} content
+   * @param {object} [activity] - The card's activity, when already looked up
+   * @returns {boolean}
+   */
+  #listsSaveTargets(origin, content, activity = origin.getAssociatedActivity?.()) {
+    if (activity?.type !== "save") return false;
+    return !this.adapter.ownsSaves?.(origin, content);
+  }
+
+  /**
    * Makes a save row collapse its list of saves. Clicking the row's icon or any empty area of the
    * row toggles the list; clicks on buttons, links and the DC are left alone. The state is kept
    * per card and ability so re-renders restore it. The chevron goes into the total column when
@@ -1304,7 +1319,7 @@ export class CompactCards5e {
     const face = content.querySelector(".chat-card");
     if (!face || face.querySelector(":scope > .dcc-card-targets")) return;
     const activity = origin.getAssociatedActivity?.();
-    const isSaveActivity = activity?.type === "save";
+    const isSaveActivity = this.#listsSaveTargets(origin, content, activity);
 
     const row = document.createElement("section");
     row.className = "icon-row dcc-card-targets";

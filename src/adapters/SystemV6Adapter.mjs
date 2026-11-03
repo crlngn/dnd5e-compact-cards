@@ -23,11 +23,15 @@ export class SystemV6Adapter {
   /** @type {boolean} Whether the summary template getters have been installed */
   #patched = false;
 
+  /** @type {boolean} Whether midi-qol is active, in which case its cards roll and list their own saves */
+  midiActive = false;
+
   /**
    * @param {import("../CompactCards5e.mjs").CompactCards5e} cards
    */
   constructor(cards) {
     this.cards = cards;
+    this.midiActive = game.modules?.get("midi-qol")?.active === true;
   }
 
   /**
@@ -115,6 +119,30 @@ export class SystemV6Adapter {
    */
   isHealing(message) {
     return message?.system?.isHealing === true;
+  }
+
+  /**
+   * Whether a usage card is driven by a midi-qol workflow. The card's midi flags tell, or its
+   * face when the content is at hand, as the flags arrive with midi's first update.
+   * @param {ChatMessage} message
+   * @param {HTMLElement} [content] - The message content element, when rendered
+   * @returns {boolean}
+   */
+  isMidiCard(message, content) {
+    if (!this.midiActive || !this.isUsageMessage(message)) return false;
+    return Boolean(message.flags?.["midi-qol"]) || Boolean(content?.querySelector?.(".chat-card.midi-chat-card"));
+  }
+
+  /**
+   * Whether another module rolls this card's saves and shows the results itself. midi-qol rolls
+   * them inside its workflow and lists them on its card, so no save message ever reaches the
+   * card and a save section built here would only show placeholders.
+   * @param {ChatMessage} message
+   * @param {HTMLElement} [content]
+   * @returns {boolean}
+   */
+  ownsSaves(message, content) {
+    return this.isMidiCard(message, content);
   }
 
   /**

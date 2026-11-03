@@ -213,6 +213,18 @@ export class SystemV5Adapter {
   }
 
   /**
+   * Whether another module rolls this card's saves and shows the results itself. midi-qol rolls
+   * them inside its workflow and lists them on its card, so no save message ever reaches the
+   * card and a save section built here would only show placeholders.
+   * @param {ChatMessage} message
+   * @param {HTMLElement} [content]
+   * @returns {boolean}
+   */
+  ownsSaves(message, content) {
+    return this.isMidiCard(message, content);
+  }
+
+  /**
    * Whether a roll must not be rewritten. midi-qol decides hits, saves and damage from the rolls
    * it holds in memory and rewrites its card from them, so every roll it made is left alone: the
    * rolls on its cards, and roll messages it flagged or that belong to one of its cards.
