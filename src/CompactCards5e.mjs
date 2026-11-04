@@ -1161,11 +1161,13 @@ export class CompactCards5e {
    * Builds the save section. For save activities every recorded target is listed, showing its
    * save summary when it has rolled and a placeholder otherwise, and the card's own targets row is
    * hidden. Other cards group the save summaries dnd5e rendered by ability. Counts and the DC are
-   * only shown when the challenge is visible to this user.
+   * only shown when the challenge is visible to this user. Nothing is built when the card shows
+   * midi-qol's own saves display, which already lists the targets and their results.
    * @param {ChatMessage} origin
    * @param {HTMLElement} content
    */
   #groupSaves(origin, content) {
+    if (content.querySelector(".midi-qol-saves-display.midi-qol-section-filled")) return;
     const activity = origin.getAssociatedActivity?.();
     const isSaveActivity = activity?.type === "save";
     const entries = [];
